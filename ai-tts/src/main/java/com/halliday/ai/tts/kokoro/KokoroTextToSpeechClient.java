@@ -74,6 +74,8 @@ public class KokoroTextToSpeechClient implements TextToSpeechClient {
         payload.put("voice", StringUtils.hasText(voice) ? voice : properties.getVoice());
         payload.put("input", text);
         payload.put("response_format", properties.getFormat());
+        // Ask backend to render with our desired sample rate when supported
+        payload.put("sample_rate", properties.getSampleRate());
         payload.put("stream", false);
         return payload;
     }

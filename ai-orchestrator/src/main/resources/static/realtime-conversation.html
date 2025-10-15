@@ -212,6 +212,9 @@
     let playbackContext = null;
     let playbackTime = 0;
     let playbackQueue = Promise.resolve();
+    let pendingTtsPcm = [];
+    let pendingTtsSampleRate = null;
+    let pendingTtsChannels = null;
 
     let resampleBuffer = [];
     let sampleRateRatio = 1;
@@ -247,6 +250,9 @@
         conversationHistory = [];
         playbackTime = 0;
         playbackQueue = Promise.resolve();
+        pendingTtsPcm = [];
+        pendingTtsSampleRate = null;
+        pendingTtsChannels = null;
     }
 
     async function startExperience() {
@@ -510,7 +516,9 @@
                 break;
             case 'tts_chunk':
                 if (data.audioBase64) {
-                    queuePlaybackStep(() => schedulePlaybackChunk(data));
+                    pendingTtsPcm.push(decodeBase64ToInt16(data.audioBase64));
+                    pendingTtsSampleRate = Number(data.sampleRate) || pendingTtsSampleRate || targetSampleRate();
+                    pendingTtsChannels = Number(data.channels) || pendingTtsChannels || 1;
                 }
                 break;
             case 'tts_complete':
@@ -518,6 +526,12 @@
                     conversationHistory = data.history;
                 }
                 queuePlaybackStep(async () => {
+                    const sr = Number(data.sampleRate) || pendingTtsSampleRate || targetSampleRate();
+                    const channels = Number(data.channels) || pendingTtsChannels || 1;
+                    const merged = mergePendingTts();
+                    if (merged.length > 0) {
+                        await playInt16Buffer(merged, sr, channels);
+                    }
                     awaitingReply = false;
                     recordingActive = true;
                     lastVoiceTime = performance.now();
@@ -556,25 +570,41 @@
             });
     }
 
-    async function schedulePlaybackChunk(message) {
-        const sr = Number(message.sampleRate) || targetSampleRate();
-        const channels = Math.max(1, Number(message.channels) || 1);
-        const int16 = decodeBase64ToInt16(message.audioBase64);
+    function mergePendingTts() {
+        if (pendingTtsPcm.length === 0) {
+            return new Int16Array(0);
+        }
+        const total = pendingTtsPcm.reduce((sum, chunk) => sum + chunk.length, 0);
+        const merged = new Int16Array(total);
+        let offset = 0;
+        for (const chunk of pendingTtsPcm) {
+            merged.set(chunk, offset);
+            offset += chunk.length;
+        }
+        pendingTtsPcm = [];
+        pendingTtsSampleRate = null;
+        pendingTtsChannels = null;
+        return merged;
+    }
+
+    async function playInt16Buffer(int16, sampleRate, channels) {
         if (int16.length === 0) {
             return;
         }
+        const sr = Math.max(1, sampleRate || targetSampleRate());
+        const ch = Math.max(1, channels || 1);
         if (!playbackContext) {
             playbackContext = new (window.AudioContext || window.webkitAudioContext)();
         }
         if (playbackContext.state === 'suspended') {
             await playbackContext.resume();
         }
-        const frameCount = Math.floor(int16.length / channels);
-        const buffer = playbackContext.createBuffer(channels, frameCount, sr);
-        for (let channel = 0; channel < channels; channel++) {
+        const frameCount = Math.floor(int16.length / ch);
+        const buffer = playbackContext.createBuffer(ch, frameCount, sr);
+        for (let channel = 0; channel < ch; channel++) {
             const channelData = buffer.getChannelData(channel);
             for (let i = 0; i < frameCount; i++) {
-                channelData[i] = int16[i * channels + channel] / 0x7fff;
+                channelData[i] = int16[i * ch + channel] / 0x7fff;
             }
         }
         await new Promise((resolve) => {

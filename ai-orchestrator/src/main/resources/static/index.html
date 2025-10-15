@@ -3,12 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Halliday AI 离线语音转写体验</title>
+    <title>Halliday AI 能力体验导航</title>
     <style>
         :root {
             color-scheme: light dark;
             font-family: "Segoe UI", "Helvetica Neue", Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", sans-serif;
-            background-color: #0d1117;
+            background: radial-gradient(circle at 20% 20%, rgba(96, 165, 250, 0.25), transparent 55%),
+                        radial-gradient(circle at 80% 10%, rgba(129, 140, 248, 0.2), transparent 50%),
+                        #0d1117;
             color: #e6edf3;
         }
         body {
@@ -25,218 +27,64 @@
             background: rgba(13, 17, 23, 0.85);
             border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 18px;
-            padding: 2.5rem;
-            box-shadow: 0 18px 36px rgba(15, 23, 42, 0.45);
+            padding: 3rem 2.5rem;
+            box-shadow: 0 22px 42px rgba(15, 23, 42, 0.45);
             backdrop-filter: blur(14px);
         }
         h1 {
-            font-size: clamp(1.75rem, 1.1rem + 2vw, 2.75rem);
+            font-size: clamp(2rem, 1.35rem + 2vw, 2.85rem);
             margin: 0 0 1.5rem;
             letter-spacing: 0.02em;
         }
-        h2 {
-            font-size: clamp(1.25rem, 1rem + 1vw, 1.65rem);
-            margin: 0 0 1rem;
-            letter-spacing: 0.01em;
-        }
         p {
-            margin: 0 0 1.5rem;
+            margin: 0 0 2rem;
             line-height: 1.75;
             color: rgba(230, 237, 243, 0.78);
         }
-        label {
+        .links {
+            display: grid;
+            gap: 1.5rem;
+        }
+        a.card-link {
             display: block;
-            margin-bottom: 0.75rem;
-            font-weight: 600;
-            letter-spacing: 0.01em;
-        }
-        input[type="url"] {
-            width: 100%;
-            padding: 0.85rem 1rem;
-            border-radius: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            background: rgba(2, 6, 23, 0.65);
-            color: inherit;
-            font-size: 1rem;
-            transition: border-color 0.2s ease, box-shadow 0.2s ease;
-        }
-        input[type="url"]:focus {
-            outline: none;
-            border-color: rgba(99, 179, 237, 0.85);
-            box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.15);
-        }
-        button {
-            margin-top: 1.5rem;
-            padding: 0.9rem 1.6rem;
-            border-radius: 12px;
-            border: none;
-            font-weight: 600;
-            letter-spacing: 0.05em;
-            background: linear-gradient(135deg, #60a5fa, #818cf8);
-            color: #0b1120;
-            cursor: pointer;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }
-        button:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 10px 24px rgba(96, 165, 250, 0.35);
-        }
-        pre {
-            margin-top: 1.75rem;
-            padding: 1.4rem;
+            padding: 1.4rem 1.6rem;
             border-radius: 14px;
-            background: rgba(2, 6, 23, 0.8);
-            border: 1px solid rgba(59, 130, 246, 0.25);
-            color: rgba(224, 231, 255, 0.92);
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-        small {
-            display: block;
-            margin-top: 0.75rem;
-            color: rgba(148, 163, 184, 0.8);
-        }
-        .section {
-            margin-bottom: 2.5rem;
-            padding-bottom: 2rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-        }
-        .section:last-of-type {
-            border-bottom: none;
-            padding-bottom: 0;
-            margin-bottom: 2rem;
-        }
-        .api-info {
-            margin-top: 2rem;
-            padding-top: 1.5rem;
-            border-top: 1px solid rgba(255, 255, 255, 0.08);
-        }
-        a {
-            color: #93c5fd;
-        }
-        .audio-player {
-            margin-top: 1.25rem;
-            width: 100%;
-        }
-        .download-link {
-            display: inline-block;
-            margin-top: 0.75rem;
-            padding: 0.6rem 1rem;
-            border-radius: 10px;
-            background: rgba(59, 130, 246, 0.2);
-            color: #cbd5f5;
+            background: rgba(2, 6, 23, 0.78);
+            border: 1px solid rgba(59, 130, 246, 0.35);
+            color: inherit;
             text-decoration: none;
-            transition: background 0.2s ease;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
         }
-        .download-link:hover {
-            background: rgba(59, 130, 246, 0.35);
+        a.card-link:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 14px 28px rgba(96, 165, 250, 0.25);
+            border-color: rgba(129, 140, 248, 0.55);
+        }
+        a.card-link strong {
+            display: block;
+            font-size: 1.2rem;
+            margin-bottom: 0.35rem;
+        }
+        a.card-link span {
+            display: block;
+            color: rgba(148, 163, 184, 0.85);
         }
     </style>
 </head>
 <body>
 <div class="card">
-    <h1>离线语音能力体验</h1>
-    <section class="section">
-        <h2>仅调用 STT 获取文本</h2>
-        <p>在下方输入 WAV 文件的公网访问地址，点击“发起转写”即可调用 <code>/orchestrator/stt/offline</code> 接口，获取完整的转写文本。</p>
-        <form id="transcribe-form">
-            <label for="wav-url">WAV 文件地址</label>
-            <input id="wav-url" name="wavUrl" type="url" placeholder="https://example.com/audio.wav" required>
-            <button type="submit">发起转写</button>
-        </form>
-        <pre id="result" hidden>等待请求...</pre>
-    </section>
-
-    <section class="section">
-        <h2>体验 STT → LLM → TTS 全链路</h2>
-        <p>输入同一段音频地址，即可调用 <code>/orchestrator/pipeline</code>，依次完成语音识别、模型对话与语音合成，返回文本与音频。</p>
-        <form id="pipeline-form">
-            <label for="pipeline-wav-url">WAV 文件地址</label>
-            <input id="pipeline-wav-url" name="wavUrl" type="url" placeholder="https://example.com/audio.wav" required>
-            <button type="submit">发起全链路体验</button>
-        </form>
-        <pre id="pipeline-result" hidden>等待请求...</pre>
-        <audio id="pipeline-audio" class="audio-player" controls hidden></audio>
-        <a id="pipeline-download" class="download-link" hidden download>下载合成音频</a>
-    </section>
-
-    <div class="api-info">
-        <strong>接口说明</strong>
-        <p>
-            <code>GET /orchestrator/stt/offline?wavUrl=</code> 接收一个可访问的 WAV 文件地址，返回识别出的文本。<br>
-            <code>GET /orchestrator/pipeline?wavUrl=</code> 完整编排 STT、LLM、TTS，并以 JSON 返回识别文本、模型回复及 Base64 音频数据。<br>
-            示例请求：<br>
-            <code>curl -G "${location.origin}/orchestrator/stt/offline" --data-urlencode "wavUrl=https://example.com/audio.wav"</code><br>
-            <code>curl -G "${location.origin}/orchestrator/pipeline" --data-urlencode "wavUrl=https://example.com/audio.wav"</code>
-        </p>
-        <small>如需查看应用运行状况，可访问 <a href="/actuator/health">/actuator/health</a>。</small>
+    <h1>Halliday AI 能力体验</h1>
+    <p>请选择要体验的链路。离线页面用于通过音频 URL 调用 STT，实时页面支持麦克风输入，体验 STT → LLM → TTS 的连续对话能力。</p>
+    <div class="links">
+        <a class="card-link" href="stt-offline.html">
+            <strong>离线转写（REST）</strong>
+            <span>输入 WAV 地址，调用 /orchestrator/stt/offline 获取完整文本。</span>
+        </a>
+        <a class="card-link" href="realtime-conversation.html">
+            <strong>实时语音对话（WebSocket）</strong>
+            <span>使用麦克风持续推流，体验 STT → LLM → TTS 的循环流程。</span>
+        </a>
     </div>
 </div>
-<script>
-    const form = document.getElementById('transcribe-form');
-    const result = document.getElementById('result');
-    const pipelineForm = document.getElementById('pipeline-form');
-    const pipelineResult = document.getElementById('pipeline-result');
-    const pipelineAudio = document.getElementById('pipeline-audio');
-    const pipelineDownload = document.getElementById('pipeline-download');
-
-    form.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const formData = new FormData(form);
-        const wavUrl = formData.get('wavUrl');
-        result.hidden = false;
-        result.textContent = '正在请求接口...';
-
-        try {
-            const response = await fetch(`/orchestrator/stt/offline?wavUrl=${encodeURIComponent(wavUrl)}`);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status} ${response.statusText}`);
-            }
-            const text = await response.text();
-            result.textContent = text.trim() ? text : '接口返回为空';
-        } catch (error) {
-            result.textContent = `调用失败：${error.message}`;
-        }
-    });
-
-    pipelineForm.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const formData = new FormData(pipelineForm);
-        const wavUrl = formData.get('wavUrl');
-        pipelineResult.hidden = false;
-        pipelineResult.textContent = '正在编排 STT → LLM → TTS...';
-        pipelineAudio.hidden = true;
-        pipelineAudio.removeAttribute('src');
-        pipelineAudio.load();
-        pipelineDownload.hidden = true;
-        pipelineDownload.removeAttribute('href');
-
-        try {
-            const response = await fetch(`/orchestrator/pipeline?wavUrl=${encodeURIComponent(wavUrl)}`);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status} ${response.statusText}`);
-            }
-            const data = await response.json();
-            const lines = [];
-            lines.push(`识别文本：${data.transcription && data.transcription.trim() ? data.transcription : '（空）'}`);
-            lines.push(`LLM 回复：${data.reply && data.reply.trim() ? data.reply : '（空）'}`);
-            if (data.audioBase64) {
-                lines.push(`音频格式：${data.audioFormat || '未知'}`);
-                const mime = data.audioMimeType || 'application/octet-stream';
-                const source = `data:${mime};base64,${data.audioBase64}`;
-                pipelineAudio.src = source;
-                pipelineAudio.hidden = false;
-                pipelineAudio.load();
-                pipelineDownload.href = source;
-                const ext = data.audioFormat ? data.audioFormat : 'bin';
-                pipelineDownload.download = `pipeline.${ext}`;
-                pipelineDownload.hidden = false;
-            }
-            pipelineResult.textContent = lines.join('\n');
-        } catch (error) {
-            pipelineResult.textContent = `调用失败：${error.message}`;
-        }
-    });
-</script>
 </body>
 </html>

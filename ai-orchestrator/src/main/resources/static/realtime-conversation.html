@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>实时语音对话体验</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            font-family: "Segoe UI", "Helvetica Neue", Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", sans-serif;
+            background-color: #030712;
+            color: #e6edf3;
+        }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            padding: 2.5rem 1.25rem 3rem;
+            display: flex;
+            justify-content: center;
+        }
+        .card {
+            width: min(960px, 100%);
+            background: rgba(13, 17, 23, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 18px;
+            padding: 2.75rem 2.5rem;
+            box-shadow: 0 24px 48px rgba(15, 23, 42, 0.55);
+            backdrop-filter: blur(16px);
+        }
+        h1 {
+            font-size: clamp(1.85rem, 1.2rem + 1.8vw, 2.8rem);
+            margin: 0 0 1.75rem;
+        }
+        p {
+            margin: 0 0 1.5rem;
+            line-height: 1.7;
+            color: rgba(226, 232, 240, 0.8);
+        }
+        .nav-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            margin-bottom: 1.5rem;
+            color: rgba(148, 163, 184, 0.85);
+            text-decoration: none;
+        }
+        .nav-link::before {
+            content: "←";
+        }
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: center;
+            margin-bottom: 1.75rem;
+        }
+        label.inline {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            font-weight: 600;
+        }
+        input[type="number"] {
+            width: 160px;
+            padding: 0.55rem 0.75rem;
+            border-radius: 10px;
+            border: 1px solid rgba(148, 163, 184, 0.4);
+            background: rgba(2, 6, 23, 0.6);
+            color: inherit;
+            font-size: 0.95rem;
+        }
+        button.primary {
+            padding: 0.85rem 1.8rem;
+            border-radius: 999px;
+            border: none;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            background: linear-gradient(135deg, #34d399, #22d3ee);
+            color: #02131f;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        button.primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 12px 28px rgba(45, 212, 191, 0.32);
+        }
+        button.primary:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        button.danger {
+            padding: 0.85rem 1.8rem;
+            border-radius: 999px;
+            border: 1px solid rgba(248, 113, 113, 0.65);
+            font-weight: 600;
+            background: transparent;
+            color: #fca5a5;
+            cursor: pointer;
+            transition: background 0.2s ease, color 0.2s ease;
+        }
+        button.danger:hover {
+            background: rgba(248, 113, 113, 0.12);
+            color: #fecaca;
+        }
+        button.danger:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 0.75rem 1rem;
+            border-radius: 12px;
+            background: rgba(30, 64, 175, 0.18);
+            border: 1px solid rgba(96, 165, 250, 0.25);
+            font-size: 0.95rem;
+            color: rgba(191, 219, 254, 0.9);
+        }
+        .panels {
+            display: grid;
+            gap: 1.5rem;
+        }
+        .panel {
+            padding: 1.5rem;
+            border-radius: 14px;
+            background: rgba(2, 6, 23, 0.7);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+        }
+        .panel h2 {
+            margin: 0 0 1rem;
+            font-size: 1.15rem;
+        }
+        .transcript, .reply {
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+        }
+        .bubble {
+            padding: 0.75rem 1rem;
+            border-radius: 12px;
+            background: rgba(15, 23, 42, 0.55);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            line-height: 1.6;
+        }
+        .bubble.user {
+            border-color: rgba(59, 130, 246, 0.45);
+            background: rgba(37, 99, 235, 0.12);
+        }
+        .bubble.assistant {
+            border-color: rgba(16, 185, 129, 0.45);
+            background: rgba(16, 185, 129, 0.12);
+        }
+        .log {
+            max-height: 180px;
+            overflow-y: auto;
+            font-family: "Fira Code", "SFMono-Regular", "Menlo", monospace;
+            font-size: 0.85rem;
+            line-height: 1.55;
+            white-space: pre-wrap;
+            color: rgba(203, 213, 225, 0.85);
+        }
+        .hint {
+            margin-top: 1rem;
+            font-size: 0.85rem;
+            color: rgba(148, 163, 184, 0.75);
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <a class="nav-link" href="index.html">返回首页</a>
+    <h1>实时语音对话</h1>
+    <p>点击“开始体验”后，浏览器会请求麦克风权限并建立 WebSocket 连接，将 PCM16LE 音频持续推送至 <code>/ai/stream</code>。页面内置一个简单的能量 VAD：若静默超过 2 秒且上一轮回复已播报完成，则发送 <code>vad_end</code> 控制消息，触发 LLM 回复与 TTS 播放。</p>
+    <div class="controls">
+        <label class="inline">STT 目标采样率
+            <input id="stt-rate" type="number" value="16000" min="8000" max="48000" step="1000">
+        </label>
+        <label class="inline">TTS 播放采样率
+            <input id="tts-rate" type="number" value="24000" min="8000" max="48000" step="1000">
+        </label>
+        <button id="start" class="primary">开始体验</button>
+        <button id="stop" class="danger" disabled>结束体验</button>
+        <div id="status" class="status">未连接</div>
+    </div>
+    <div class="panels">
+        <section class="panel">
+            <h2>识别文本</h2>
+            <div id="transcript" class="transcript"></div>
+        </section>
+        <section class="panel">
+            <h2>LLM 回复</h2>
+            <div id="reply" class="reply"></div>
+            <p class="hint">音频会在后台排队播放，若需要重新开始，可直接点击“结束体验”并再次“开始”。</p>
+        </section>
+        <section class="panel">
+            <h2>调试日志</h2>
+            <div id="log" class="log"></div>
+        </section>
+    </div>
+</div>
+<script>
+    const startBtn = document.getElementById('start');
+    const stopBtn = document.getElementById('stop');
+    const statusEl = document.getElementById('status');
+    const transcriptEl = document.getElementById('transcript');
+    const replyEl = document.getElementById('reply');
+    const logEl = document.getElementById('log');
+    const sttRateInput = document.getElementById('stt-rate');
+    const ttsRateInput = document.getElementById('tts-rate');
+
+    const vadSilenceMs = 2000;
+    const vadThreshold = 0.015;
+
+    let ws = null;
+    let mediaStream = null;
+    let captureContext = null;
+    let processor = null;
+    let playbackContext = null;
+    let playbackTime = 0;
+
+    let resampleBuffer = [];
+    let sampleRateRatio = 3;
+    let sendingEnabled = false;
+    let awaitingReply = false;
+    let segmentActive = false;
+    let lastVoiceTime = 0;
+    let closed = false;
+
+    const interimMap = new Map();
+    const replyMap = new Map();
+
+    function log(message) {
+        const time = new Date().toLocaleTimeString();
+        logEl.textContent += `[${time}] ${message}\n`;
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setStatus(text) {
+        statusEl.textContent = text;
+    }
+
+    function resetUi() {
+        transcriptEl.innerHTML = '';
+        replyEl.innerHTML = '';
+        logEl.textContent = '';
+        interimMap.clear();
+        replyMap.clear();
+        playbackTime = 0;
+    }
+
+    async function startConversation() {
+        closed = false;
+        resetUi();
+        setStatus('初始化中...');
+        startBtn.disabled = true;
+        sttRateInput.disabled = true;
+        ttsRateInput.disabled = true;
+        stopBtn.disabled = false;
+
+        try {
+            await connectWebSocket();
+            await setupMicrophone();
+            setStatus('推流中，等待 VAD');
+            sendingEnabled = true;
+            lastVoiceTime = performance.now();
+        } catch (error) {
+            log(`初始化失败：${error.message}`);
+            setStatus('初始化失败');
+            await stopConversation();
+        }
+    }
+
+    async function connectWebSocket() {
+        return new Promise((resolve, reject) => {
+            ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ai/stream`);
+            ws.binaryType = 'arraybuffer';
+
+            ws.addEventListener('open', () => {
+                log('WebSocket 已连接');
+                resolve();
+            });
+
+            ws.addEventListener('message', async (event) => {
+                if (typeof event.data === 'string') {
+                    try {
+                        handleControlMessage(JSON.parse(event.data));
+                    } catch (error) {
+                        log(`解析消息失败：${error.message}`);
+                    }
+                } else {
+                    await handleAudioChunk(event.data);
+                }
+            });
+
+            ws.addEventListener('close', () => {
+                log('WebSocket 已关闭');
+                if (!closed) {
+                    setStatus('连接已关闭');
+                    stopConversation();
+                }
+            });
+
+            ws.addEventListener('error', () => {
+                log('WebSocket 出现错误');
+                if (ws) {
+                    try { ws.close(); } catch (ignored) {}
+                }
+                reject(new Error('WebSocket 连接失败'));
+            });
+        });
+    }
+
+    async function setupMicrophone() {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+        captureContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = captureContext.createMediaStreamSource(mediaStream);
+        processor = captureContext.createScriptProcessor(4096, 1, 1);
+        sampleRateRatio = captureContext.sampleRate / Number(sttRateInput.value || 16000);
+        resampleBuffer = [];
+
+        processor.onaudioprocess = (event) => {
+            if (!ws || ws.readyState !== WebSocket.OPEN || !sendingEnabled) {
+                return;
+            }
+            const input = event.inputBuffer.getChannelData(0);
+            resampleAndSend(input);
+        };
+
+        const silentGain = captureContext.createGain();
+        silentGain.gain.value = 0;
+        source.connect(processor);
+        processor.connect(silentGain);
+        silentGain.connect(captureContext.destination);
+        log(`麦克风已打开（设备采样率 ${captureContext.sampleRate}Hz）`);
+    }
+
+    function resampleAndSend(chunk) {
+        resampleBuffer.push(...chunk);
+        if (!Number.isFinite(sampleRateRatio) || sampleRateRatio <= 0) {
+            sampleRateRatio = 3;
+        }
+        const available = Math.floor(resampleBuffer.length / sampleRateRatio);
+        if (available === 0) {
+            return;
+        }
+        const output = new Int16Array(available);
+        let energy = 0;
+        for (let i = 0; i < available; i++) {
+            const position = i * sampleRateRatio;
+            const left = Math.floor(position);
+            const right = Math.min(left + 1, resampleBuffer.length - 1);
+            const frac = position - left;
+            const sample = resampleBuffer[left] + (resampleBuffer[right] - resampleBuffer[left]) * frac;
+            const clipped = Math.max(-1, Math.min(1, sample));
+            const intSample = Math.round(clipped * 0x7fff);
+            output[i] = intSample;
+            const normalized = intSample / 0x7fff;
+            energy += normalized * normalized;
+        }
+        const consumed = Math.floor(available * sampleRateRatio);
+        resampleBuffer = resampleBuffer.slice(consumed);
+
+        if (output.length > 0) {
+            ws.send(output.buffer);
+            handleVad(energy / output.length);
+        }
+    }
+
+    function handleVad(meanSquare) {
+        if (meanSquare > vadThreshold * vadThreshold) {
+            segmentActive = true;
+            lastVoiceTime = performance.now();
+            if (!awaitingReply) {
+                setStatus('检测到语音输入');
+            }
+        } else {
+            if (segmentActive && !awaitingReply) {
+                const elapsed = performance.now() - lastVoiceTime;
+                if (elapsed > vadSilenceMs) {
+                    sendVadEnd();
+                }
+            }
+        }
+    }
+
+    function sendVadEnd() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        if (awaitingReply) {
+            return;
+        }
+        ws.send(JSON.stringify({ type: 'vad_end' }));
+        awaitingReply = true;
+        sendingEnabled = false;
+        segmentActive = false;
+        log('发送 vad_end 控制消息');
+        setStatus('等待模型回复...');
+    }
+
+    async function handleAudioChunk(buffer) {
+        if (!playbackContext) {
+            playbackContext = new (window.AudioContext || window.webkitAudioContext)();
+            playbackTime = playbackContext.currentTime;
+        }
+        const rate = Number(ttsRateInput.value || 24000);
+        const int16 = new Int16Array(buffer);
+        if (int16.length === 0) {
+            return;
+        }
+        const audioBuffer = playbackContext.createBuffer(1, int16.length, rate);
+        const channel = audioBuffer.getChannelData(0);
+        for (let i = 0; i < int16.length; i++) {
+            channel[i] = int16[i] / 0x7fff;
+        }
+        const source = playbackContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(playbackContext.destination);
+        if (playbackTime < playbackContext.currentTime) {
+            playbackTime = playbackContext.currentTime;
+        }
+        source.start(playbackTime);
+        playbackTime += audioBuffer.duration;
+    }
+
+    function handleControlMessage(message) {
+        switch (message.type) {
+            case 'interim_text':
+                updateTranscript(message.idx, message.text, true);
+                break;
+            case 'final_text':
+                updateTranscript(message.idx, message.text, false);
+                awaitingReply = true;
+                break;
+            case 'done':
+                awaitingReply = false;
+                sendingEnabled = !closed;
+                segmentActive = false;
+                lastVoiceTime = performance.now();
+                setStatus('回复播报完成，可继续对话');
+                break;
+            case 'error':
+                log(`服务端错误：${message.code || ''} ${message.message || ''}`);
+                setStatus('发生错误，已停止');
+                stopConversation();
+                break;
+            default:
+                if (message.reply) {
+                    updateReply(message.idx ?? Date.now(), message.reply);
+                }
+        }
+    }
+
+    function updateTranscript(idx, text, interim) {
+        if (typeof idx !== 'number') {
+            return;
+        }
+        let container = interimMap.get(idx);
+        if (!container) {
+            container = document.createElement('div');
+            container.className = 'bubble user';
+            transcriptEl.appendChild(container);
+            interimMap.set(idx, container);
+        }
+        container.textContent = text || '';
+        if (!interim) {
+            container.dataset.final = 'true';
+            log(`识别完成（idx=${idx}）：${text}`);
+        }
+    }
+
+    function updateReply(idx, text) {
+        if (!text) {
+            return;
+        }
+        let bubble = replyMap.get(idx);
+        if (!bubble) {
+            bubble = document.createElement('div');
+            bubble.className = 'bubble assistant';
+            replyEl.appendChild(bubble);
+            replyMap.set(idx, bubble);
+        }
+        bubble.textContent = text;
+    }
+
+    async function stopConversation() {
+        closed = true;
+        startBtn.disabled = false;
+        sttRateInput.disabled = false;
+        ttsRateInput.disabled = false;
+        stopBtn.disabled = true;
+        sendingEnabled = false;
+        awaitingReply = false;
+        segmentActive = false;
+        lastVoiceTime = performance.now();
+        setStatus('未连接');
+
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            try {
+                ws.send(JSON.stringify({ type: 'eos' }));
+            } catch (error) {
+                // ignore
+            }
+            ws.close();
+        }
+        ws = null;
+
+        if (processor) {
+            processor.disconnect();
+            processor.onaudioprocess = null;
+            processor = null;
+        }
+        if (captureContext) {
+            await captureContext.close().catch(() => {});
+            captureContext = null;
+        }
+        if (mediaStream) {
+            mediaStream.getTracks().forEach(track => track.stop());
+            mediaStream = null;
+        }
+        if (playbackContext) {
+            playbackContext.close().catch(() => {});
+            playbackContext = null;
+        }
+    }
+
+    startBtn.addEventListener('click', () => {
+        if (!ws) {
+            startConversation();
+        }
+    });
+
+    stopBtn.addEventListener('click', () => {
+        stopConversation();
+    });
+</script>
+</body>
+</html>

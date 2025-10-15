@@ -1,5 +1,6 @@
 package com.halliday.ai.stt.sherpa;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.halliday.ai.common.dto.SttResult;
 import com.halliday.ai.common.metrics.AiMetrics;
@@ -160,8 +161,10 @@ public class SherpaSttService implements SttService {
         @Override
         public void onMessage(WebSocket webSocket, String text) {
             try {
-                SttResult result = objectMapper.readValue(text, SttResult.class);
-                consumer.accept(result);
+                SttResult result = parseResult(text);
+                if (result != null) {
+                    consumer.accept(result);
+                }
             } catch (IOException ex) {
                 log.error("解析 Sherpa 响应失败: {}", text, ex);
                 fail(ex);
@@ -193,6 +196,84 @@ public class SherpaSttService implements SttService {
             if (completed != null) {
                 completed.completeExceptionally(throwable);
             }
+        }
+
+        private SttResult parseResult(String payload) throws IOException {
+            JsonNode node = objectMapper.readTree(payload);
+            String type = node.path("type").asText("");
+            if (type.isEmpty()) {
+                return null;
+            }
+
+            boolean finished = isFinalType(type) || node.path("finished").asBoolean(false)
+                    || node.path("final").asBoolean(false) || node.path("is_final").asBoolean(false);
+
+            if (!isResultType(type) && !finished) {
+                return null;
+            }
+
+            String text = extractText(node);
+            int idx = extractSegmentIndex(node);
+
+            return SttResult.builder()
+                    .text(text)
+                    .finished(finished)
+                    .idx(idx)
+                    .build();
+        }
+
+        private boolean isFinalType(String type) {
+            String normalized = type.toLowerCase();
+            return normalized.equals("final_result")
+                    || normalized.equals("final")
+                    || normalized.endsWith("_final");
+        }
+
+        private boolean isResultType(String type) {
+            return type.toLowerCase().contains("result");
+        }
+
+        private String extractText(JsonNode node) {
+            String value = node.path("text").asText("");
+            if (!value.isEmpty()) {
+                return value;
+            }
+            JsonNode segmentNode = node.path("segment");
+            if (segmentNode.isObject()) {
+                value = segmentNode.path("text").asText("");
+                if (!value.isEmpty()) {
+                    return value;
+                }
+            }
+            return value;
+        }
+
+        private int extractSegmentIndex(JsonNode node) {
+            if (node.has("idx")) {
+                return node.path("idx").asInt();
+            }
+            if (node.has("index")) {
+                return node.path("index").asInt();
+            }
+            if (node.has("seg_index")) {
+                return node.path("seg_index").asInt();
+            }
+            JsonNode segmentNode = node.path("segment");
+            if (segmentNode.isObject()) {
+                if (segmentNode.has("idx")) {
+                    return segmentNode.path("idx").asInt();
+                }
+                if (segmentNode.has("index")) {
+                    return segmentNode.path("index").asInt();
+                }
+                if (segmentNode.has("segment_id")) {
+                    return segmentNode.path("segment_id").asInt();
+                }
+                if (segmentNode.has("seg_index")) {
+                    return segmentNode.path("seg_index").asInt();
+                }
+            }
+            return 0;
         }
     }
 }

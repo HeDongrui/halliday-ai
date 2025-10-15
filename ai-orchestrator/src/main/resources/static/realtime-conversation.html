@@ -528,19 +528,34 @@
                         log(`助手回复：${lastEntry.content}`);
                     }
                     awaitingReply = false;
-                    recordingActive = true;
                     currentAssistantBubble = null;
                     lastVoiceTime = performance.now();
                     setStatus('请继续讲话');
+                    try {
+                        sendStartMessage();
+                        hasSentAudio = false;
+                        recordingActive = true;
+                    } catch (error) {
+                        log(`重新开始会话失败：${error.message || error}`);
+                        setStatus('无法继续对话，请手动重新开始');
+                    }
                 });
                 break;
             case 'no_speech':
                 awaitingReply = false;
-                recordingActive = true;
+                recordingActive = false;
                 lastVoiceTime = performance.now();
                 currentUserBubble = null;
                 setStatus('未识别到语音，请继续讲话');
                 log('ASR 未识别到内容');
+                try {
+                    sendStartMessage();
+                    hasSentAudio = false;
+                    recordingActive = true;
+                } catch (error) {
+                    log(`重新开始会话失败：${error.message || error}`);
+                    setStatus('无法继续对话，请手动重新开始');
+                }
                 break;
             case 'error':
                 log(`服务端错误：${data.code || ''} ${data.message || ''}`.trim());

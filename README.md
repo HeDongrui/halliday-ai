@@ -5,7 +5,7 @@
 `halliday-ai` 是一个基于 **Java 21 / Spring Boot 3** 的多模块编排工程，实现离线 REST 语音识别与实时 WebSocket 音频编排能力。编排链路如下：
 
 ```
-客户端 PCM → STT (Sherpa) → 文本 → LLM (Ollama) → 回复文本 → TTS (Kokoro) → PCM 返回
+客户端 PCM → STT (Sherpa) → 文本 → LLM (Chat Completions) → 回复文本 → TTS (Kokoro) → PCM 返回
 ```
 
 REST 接口返回 `text/plain`，便于命令行工具直接查看。WebSocket 端点 `/ai/stream` 支持 PCM16LE 流式上行，并按 JSON + 二进制帧推送识别文本与合成语音。
@@ -17,7 +17,7 @@ halliday-ai/
 ├─ ai-common/       # DTO、工具与指标常量
 ├─ ai-stt/          # STT 统一接口与 Sherpa WebSocket 实现
 ├─ ai-tts/          # TTS 统一接口与 Kokoro HTTP/WS 实现
-├─ ai-llm/          # LLM 统一接口与 Ollama 流式实现
+├─ ai-llm/          # LLM 统一接口与 Chat Completions 实现
 └─ ai-orchestrator/ # Spring Boot 应用，提供 REST 与 WebSocket 编排
 ```
 
@@ -25,7 +25,7 @@ halliday-ai/
 
 1. **准备依赖服务**（需提前启动）：
    - Sherpa VoiceAPI WebSocket（示例：`ws://127.0.0.1:8000/asr?samplerate=16000`）。
-   - Ollama（示例：`http://127.0.0.1:11434`，模型 `qwen3:latest`）。
+   - 任意兼容 OpenAI Chat Completions 的服务（示例：`http://127.0.0.1:3000/v1/chat/completions`，模型 `llama3.1`）。
    - Kokoro FastAPI（HTTP `http://127.0.0.1:8880/v1/audio/speech`，WebSocket `ws://127.0.0.1:8880/v1/ws/tts/stream`）。
 
 2. **编译打包**（离线环境可预先下载依赖，示例命令）
@@ -64,7 +64,7 @@ halliday-ai/
 `ai-orchestrator/src/main/resources/application.yml` 提供默认配置，可通过环境变量或外部配置文件覆盖：
 
 - `ai.stt.*`：Sherpa WebSocket 地址、帧大小、缓冲区等。
-- `ai.llm.*`：Ollama 基础地址与模型。
+- `ai.llm.*`：Chat Completions 接口地址、模型、API Key 与采样参数。
 - `ai.tts.*`：Kokoro WebSocket/HTTP 地址、默认音色与格式。
 - `management.endpoints.web.exposure.include`：暴露 `health`、`info`、`prometheus`。
 
@@ -90,7 +90,7 @@ halliday-ai/
 ## 测试
 
 - `ai-common`：`TextUtilsTest` 覆盖句末判断逻辑。
-- `ai-llm`：`OllamaChatResponseParserTest` 验证 NDJSON 解析。
+- `ai-llm`：`OllamaLlmServiceTest` 验证 Chat Completions 调用与消息体构造。
 - `ai-orchestrator`：`AiOrchestratorIntegrationTest` 通过 MockWebServer 模拟 LLM/TTS，验证从 STT 最终触发音频回推的全链路。
 
 执行全部测试：

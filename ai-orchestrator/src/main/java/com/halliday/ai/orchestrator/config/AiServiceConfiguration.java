@@ -40,9 +40,9 @@ public class AiServiceConfiguration {
     }
 
     /**
-     * 构建 Ollama LLM 服务实现。
+     * 构建 Chat Completions 兼容的 LLM 服务实现。
      *
-     * @param properties   Ollama 配置
+     * @param properties   LLM 配置
      * @param objectMapper JSON 工具
      * @param registry     指标注册器
      * @return LLM 服务实例

@@ -1,5 +1,6 @@
 package com.halliday.ai.llm.ollama;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.halliday.ai.common.dto.LlmMessage;
 import com.halliday.ai.common.metrics.AiMetrics;
@@ -13,10 +14,10 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
-import okhttp3.ResponseBody;
-import okio.BufferedSource;
+import org.springframework.util.StringUtils;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,7 +26,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
- * 基于 Ollama /api/chat 接口的流式 LLM 实现。
+ * 基于 Chat Completions 兼容接口的大模型调用实现。
  */
 @Slf4j
 public class OllamaLlmService implements LlmService {
@@ -34,7 +35,6 @@ public class OllamaLlmService implements LlmService {
 
     private final OkHttpClient client;
     private final ObjectMapper objectMapper;
-    private final OllamaChatResponseParser parser;
     private final OllamaLlmProperties properties;
     private final Counter tokenCounter;
 
@@ -49,7 +49,6 @@ public class OllamaLlmService implements LlmService {
         this.properties = Objects.requireNonNull(properties, "properties");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
         this.client = buildClient(properties);
-        this.parser = new OllamaChatResponseParser(objectMapper);
         this.tokenCounter = Counter.builder(AiMetrics.METRIC_LLM_TOKENS_TOTAL)
                 .description("LLM 流式输出的 token 数量")
                 .register(registry);
@@ -70,49 +69,67 @@ public class OllamaLlmService implements LlmService {
         try {
             Map<String, Object> payload = new HashMap<>();
             payload.put("model", properties.getModel());
-            payload.put("stream", true);
-            payload.put("messages", history);
+            payload.put("stream", false);
+            payload.put("temperature", properties.getTemperature());
+            payload.put("top_p", properties.getTopP());
+            payload.put("messages", buildMessages(history));
             byte[] bodyBytes = objectMapper.writeValueAsBytes(payload);
-            Request request = new Request.Builder()
-                    .url(properties.getBaseUrl() + "/api/chat")
+            Request.Builder requestBuilder = new Request.Builder()
+                    .url(properties.getBaseUrl())
                     .post(RequestBody.create(bodyBytes, JSON))
-                    .build();
-            try (Response response = client.newCall(request).execute()) {
+                    .addHeader("Content-Type", "application/json");
+            if (StringUtils.hasText(properties.getApiKey())) {
+                requestBuilder.addHeader("Authorization", "Bearer " + properties.getApiKey());
+            }
+            try (Response response = client.newCall(requestBuilder.build()).execute()) {
                 if (!response.isSuccessful()) {
-                    throw new IllegalStateException("调用 Ollama 失败，状态码=" + response.code());
+                    throw new IllegalStateException("调用 LLM 失败，状态码=" + response.code());
                 }
-                handleStream(response.body(), onDelta, onDone);
+                String responseText = response.body() != null ? response.body().string() : "";
+                if (!StringUtils.hasText(responseText)) {
+                    throw new IllegalStateException("LLM 返回内容为空");
+                }
+                String content = extractContent(responseText);
+                if (StringUtils.hasText(content)) {
+                    tokenCounter.increment(content.codePointCount(0, content.length()));
+                    onDelta.accept(content);
+                }
+                onDone.accept(content);
             }
         } catch (IOException ex) {
-            throw new IllegalStateException("Ollama 流式聊天失败", ex);
+            throw new IllegalStateException("调用 Chat Completions 失败", ex);
         }
     }
 
-    private void handleStream(ResponseBody responseBody, Consumer<String> onDelta, Consumer<String> onDone) throws IOException {
-        StringBuilder finalText = new StringBuilder();
-        try (ResponseBody body = responseBody; BufferedSource source = body.source()) {
-            while (!source.exhausted()) {
-                String line = source.readUtf8Line();
-                if (line == null) {
-                    break;
-                }
-                String trimmed = line.trim();
-                if (trimmed.isEmpty()) {
+    private List<Map<String, String>> buildMessages(List<LlmMessage> history) {
+        List<Map<String, String>> messages = new ArrayList<>();
+        if (StringUtils.hasText(properties.getSystemPrompt())) {
+            Map<String, String> system = new HashMap<>();
+            system.put("role", "system");
+            system.put("content", properties.getSystemPrompt());
+            messages.add(system);
+        }
+        if (history != null) {
+            for (LlmMessage message : history) {
+                if (message == null || !StringUtils.hasText(message.getContent())) {
                     continue;
                 }
-                OllamaChatChunk chunk = parser.parseLine(trimmed);
-                if (chunk.getMessage() != null && chunk.getMessage().getContent() != null) {
-                    String delta = chunk.getMessage().getContent();
-                    tokenCounter.increment(delta.codePointCount(0, delta.length()));
-                    onDelta.accept(delta);
-                    finalText.append(delta);
-                }
-                if (chunk.isDone()) {
-                    onDone.accept(finalText.toString());
-                    return;
-                }
+                Map<String, String> map = new HashMap<>();
+                map.put("role", StringUtils.hasText(message.getRole()) ? message.getRole() : "user");
+                map.put("content", message.getContent());
+                messages.add(map);
             }
-            onDone.accept(finalText.toString());
         }
+        return messages;
+    }
+
+    private String extractContent(String responseText) throws IOException {
+        JsonNode root = objectMapper.readTree(responseText);
+        JsonNode choicesNode = root.path("choices");
+        if (!choicesNode.isArray() || choicesNode.isEmpty()) {
+            throw new IllegalStateException("LLM 返回缺少 choices 字段");
+        }
+        JsonNode messageNode = choicesNode.get(0).path("message");
+        return messageNode.path("content").asText("");
     }
 }

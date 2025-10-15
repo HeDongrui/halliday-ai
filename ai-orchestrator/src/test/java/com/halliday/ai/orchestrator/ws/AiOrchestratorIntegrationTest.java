@@ -88,12 +88,11 @@ class AiOrchestratorIntegrationTest {
         Assertions.assertFalse(audioChunks.isEmpty());
         RecordedRequest request = llmServer.takeRequest(5, TimeUnit.SECONDS);
         Assertions.assertEquals("POST", request.getMethod());
+        Assertions.assertEquals("Bearer test-key", request.getHeader("Authorization"));
     }
 
     private static void prepareLlmResponse() {
-        String body = "{\"message\":{\"role\":\"assistant\",\"content\":\"你好\"},\"done\":false}\n" +
-                "{\"message\":{\"role\":\"assistant\",\"content\":\"。\"},\"done\":false}\n" +
-                "{\"message\":{\"role\":\"assistant\",\"content\":\"你好。\"},\"done\":true}\n";
+        String body = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"你好。\"}}]}";
         llmServer.enqueue(new MockResponse().setBody(body).addHeader("Content-Type", "application/json"));
     }
 
@@ -165,7 +164,8 @@ class AiOrchestratorIntegrationTest {
                 throw new IllegalStateException(ex);
             }
             TestPropertyValues.of(
-                    "ai.llm.baseUrl=" + llmServer.url("/").toString(),
+                    "ai.llm.baseUrl=" + llmServer.url("/v1/chat/completions").toString(),
+                    "ai.llm.apiKey=test-key",
                     "ai.tts.wsUrl=" + ttsServer.url("/v1/ws/tts/stream").toString().replace("http", "ws"),
                     "ai.tts.httpUrl=" + ttsServer.url("/v1/audio/speech").toString()
             ).applyTo(applicationContext.getEnvironment());

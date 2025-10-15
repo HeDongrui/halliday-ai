@@ -29,6 +29,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -102,6 +103,7 @@ public class AiStreamHandler extends AbstractWebSocketHandler {
             JsonNode node = objectMapper.readTree(message.getPayload());
             String type = node.path("type").asText();
             if ("eos".equalsIgnoreCase(type) || "vad_end".equalsIgnoreCase(type)) {
+                context.requestFinalization();
                 executor.execute(context::closeInput);
             }
         } catch (IOException ex) {
@@ -123,11 +125,19 @@ public class AiStreamHandler extends AbstractWebSocketHandler {
             return;
         }
         try {
-            if (result.isFinished()) {
+            boolean hasText = result.getText() != null && !result.getText().isBlank();
+            boolean finalizeBySherpa = result.isFinished();
+            boolean finalizeByClient = context.isFinalizationRequested() && hasText;
+
+            if (finalizeBySherpa || finalizeByClient) {
+                context.clearFinalizationRequest();
+                if (!hasText) {
+                    return;
+                }
                 sendFinalText(session, result);
                 context.appendHistory(LlmMessage.builder().role("user").content(result.getText()).build());
                 executor.execute(() -> triggerLlm(session, context, result));
-            } else {
+            } else if (hasText) {
                 sendInterimText(session, result);
             }
         } catch (Exception ex) {
@@ -303,6 +313,7 @@ public class AiStreamHandler extends AbstractWebSocketHandler {
         private final PipedInputStream audioInputStream;
         private final PipedOutputStream audioOutputStream;
         private final List<LlmMessage> history = new ArrayList<>();
+        private final AtomicBoolean finalizationRequested = new AtomicBoolean(false);
 
         StreamingContext(int bufferSize) throws IOException {
             this.audioInputStream = new PipedInputStream(bufferSize);
@@ -328,6 +339,18 @@ public class AiStreamHandler extends AbstractWebSocketHandler {
             } catch (IOException ex) {
                 log.warn("关闭音频输出失败", ex);
             }
+        }
+
+        void requestFinalization() {
+            finalizationRequested.set(true);
+        }
+
+        boolean isFinalizationRequested() {
+            return finalizationRequested.get();
+        }
+
+        void clearFinalizationRequest() {
+            finalizationRequested.set(false);
         }
 
         void close() {

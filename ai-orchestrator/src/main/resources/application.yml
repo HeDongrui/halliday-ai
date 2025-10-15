@@ -6,8 +6,12 @@ ai:
     frameBytes: 640
     bufferSize: 65536
   llm:
-    baseUrl: "http://127.0.0.1:11434"
-    model: "qwen3:latest"
+    baseUrl: "http://127.0.0.1:3000/v1/chat/completions"
+    model: "llama3.1"
+    apiKey: "${AI_LLM_API_KEY:}"
+    temperature: 0.7
+    topP: 1.0
+    systemPrompt: "你是一个中文 AI 助手，回答自然简洁。"
   tts:
     wsUrl: "ws://127.0.0.1:8880/v1/ws/tts/stream"
     httpUrl: "http://127.0.0.1:8880/v1/audio/speech"

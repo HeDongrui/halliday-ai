@@ -1,12 +1,10 @@
 package com.halliday.ai.stt.config;
 
-import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * Sherpa WebSocket ASR 服务的配置项。
  */
-@Data
 @ConfigurationProperties(prefix = "ai.stt")
 public class SherpaSttProperties {
 
@@ -31,7 +29,47 @@ public class SherpaSttProperties {
     private long readTimeoutMs = 600_000;
 
     /**
-     * PCM 写入缓冲区大小，默认 64KB。
+     * 等待 Sherpa 返回最终文本的时间，毫秒。
      */
-    private int bufferSize = 64 * 1024;
+    private long resultTimeoutMs = 5_000;
+
+    public String getWsUrl() {
+        return wsUrl;
+    }
+
+    public void setWsUrl(String wsUrl) {
+        this.wsUrl = wsUrl;
+    }
+
+    public int getFrameBytes() {
+        return frameBytes;
+    }
+
+    public void setFrameBytes(int frameBytes) {
+        this.frameBytes = frameBytes;
+    }
+
+    public long getConnectTimeoutMs() {
+        return connectTimeoutMs;
+    }
+
+    public void setConnectTimeoutMs(long connectTimeoutMs) {
+        this.connectTimeoutMs = connectTimeoutMs;
+    }
+
+    public long getReadTimeoutMs() {
+        return readTimeoutMs;
+    }
+
+    public void setReadTimeoutMs(long readTimeoutMs) {
+        this.readTimeoutMs = readTimeoutMs;
+    }
+
+    public long getResultTimeoutMs() {
+        return resultTimeoutMs;
+    }
+
+    public void setResultTimeoutMs(long resultTimeoutMs) {
+        this.resultTimeoutMs = resultTimeoutMs;
+    }
 }

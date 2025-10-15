@@ -2,31 +2,36 @@
 
 ## 项目概览
 
-`halliday-ai` 是一个基于 **Java 21 / Spring Boot 3** 的多模块编排工程，实现离线 REST 语音识别与实时 WebSocket 音频编排能力。编排链路如下：
+`halliday-ai` 基于 **Java 21 / Spring Boot 3**，提供一个最小可用的“语音对话”后端：
 
 ```
-客户端 PCM → STT (Sherpa) → 文本 → LLM (Chat Completions) → 回复文本 → TTS (Kokoro) → PCM 返回
+语音（PCM16） → Sherpa ASR → 文本 → Chat Completions → 答案文本 → Kokoro TTS → 语音（PCM16）
 ```
 
-REST 接口返回 `text/plain`，便于命令行工具直接查看。WebSocket 端点 `/ai/stream` 支持 PCM16LE 流式上行，并按 JSON + 二进制帧推送识别文本与合成语音。
+项目专注于**单轮/多轮语音对话**的基础能力，所有交互通过一个 REST 接口 `/api/conversation` 完成：
+
+1. 客户端上传音频（Base64）或直接提供文本。
+2. 服务端调用 Sherpa 完成语音识别。
+3. 将对话历史交给任意兼容 OpenAI Chat Completions 的 LLM。
+4. 通过 Kokoro TTS 返回语音回复，同时以 Base64 编码的方式返还给调用方。
 
 ## 模块结构
 
 ```
 halliday-ai/
-├─ ai-common/       # DTO、工具与指标常量
-├─ ai-stt/          # STT 统一接口与 Sherpa WebSocket 实现
-├─ ai-tts/          # TTS 统一接口与 Kokoro HTTP/WS 实现
-├─ ai-llm/          # LLM 统一接口与 Chat Completions 实现
-└─ ai-orchestrator/ # Spring Boot 应用，提供 REST 与 WebSocket 编排
+├─ ai-common/       # 音频格式与对话 DTO、通用异常
+├─ ai-stt/          # 语音识别客户端（Sherpa WebSocket 简化封装）
+├─ ai-llm/          # LLM 客户端（Chat Completions 封装）
+├─ ai-tts/          # 文本转语音客户端（Kokoro HTTP 封装）
+└─ ai-orchestrator/ # Spring Boot 应用，对外暴露 REST 接口
 ```
 
 ## 快速开始
 
 1. **准备依赖服务**（需提前启动）：
-   - Sherpa VoiceAPI WebSocket（示例：`ws://127.0.0.1:8000/asr?samplerate=16000`）。
-   - 任意兼容 OpenAI Chat Completions 的服务（示例：`http://127.0.0.1:3000/v1/chat/completions`，模型 `llama3.1`）。
-   - Kokoro FastAPI（HTTP `http://127.0.0.1:8880/v1/audio/speech`，WebSocket `ws://127.0.0.1:8880/v1/ws/tts/stream`）。
+   - Sherpa VoiceAPI WebSocket：例如 `ws://127.0.0.1:8000/asr?samplerate=16000`
+   - 任意兼容 OpenAI Chat Completions 的服务：例如 `http://127.0.0.1:3000/v1/chat/completions`
+   - Kokoro FastAPI HTTP 接口：例如 `http://127.0.0.1:8880/v1/audio/speech`
 
 2. **编译打包**（离线环境可预先下载依赖，示例命令）
    ```bash
@@ -39,60 +44,60 @@ halliday-ai/
    java -jar ai-orchestrator/target/ai-orchestrator-0.1.0-SNAPSHOT.jar
    ```
 
-4. **离线识别示例**（REST，返回纯文本）
+4. **发起一次语音对话**
+
+   将 16kHz 单声道 PCM16 音频编码为 Base64，构造请求：
+
    ```bash
-   curl "http://127.0.0.1:9099/orchestrator/stt/offline?wavUrl=https://example.com/demo.wav"
+   curl -X POST "http://127.0.0.1:9099/api/conversation" \
+        -H "Content-Type: application/json" \
+        -d '{
+              "audioBase64": "<BASE64_PCM>",
+              "sampleRate": 16000,
+              "channels": 1,
+              "bitDepth": 16,
+              "history": []
+            }'
    ```
 
-5. **实时流式测试**
-   - 使用提供的 `TestWsPusher` 将本地 WAV 推送至编排服务，并收集返回的 PCM：
-     ```bash
-     java -cp ai-orchestrator/target/ai-orchestrator-0.1.0-SNAPSHOT.jar \
-       com.halliday.ai.orchestrator.tool.TestWsPusher ./samples/demo.wav ws://127.0.0.1:9099/ai/stream
-     ffplay -f s16le -ar 16000 -ac 1 out.pcm
-     ```
-   - WebSocket 下行示例：
-     ```json
-     {"type":"interim_text","text":"你好","idx":0}
-     {"type":"final_text","text":"你好。","idx":0}
-     # 后续为二进制 PCM 帧
-     {"type":"done","idx":0}
-     ```
-   - 浏览器端体验：访问 `http://127.0.0.1:9099/`，可在首页选择“离线转写（REST）”或“实时语音对话（WebSocket）”。实时页面会请求麦克风权限并自动推流，支持静默检测触发 LLM 与 TTS 播放。
+   返回内容示例：
+
+   ```json
+   {
+     "userText": "你好",
+     "assistantText": "你好，很高兴见到你！",
+     "assistantAudioBase64": "<BASE64_PCM>",
+     "sampleRate": 16000,
+     "channels": 1,
+     "bitDepth": 16,
+     "history": [
+       {"role": "user", "content": "你好"},
+       {"role": "assistant", "content": "你好，很高兴见到你！"}
+     ]
+   }
+   ```
+
+   下次调用时，可直接把 `history` 原样带回，实现多轮语音对话。如果没有音频，亦可仅发送 `text` 字段从而进行纯文本对话。
 
 ## 配置说明
 
-`ai-orchestrator/src/main/resources/application.yml` 提供默认配置，可通过环境变量或外部配置文件覆盖：
+`ai-orchestrator/src/main/resources/application.yml` 提供可覆盖配置：
 
-- `ai.stt.*`：Sherpa WebSocket 地址、帧大小、缓冲区等。
-- `ai.llm.*`：Chat Completions 接口地址、模型、API Key 与采样参数。
-- `ai.tts.*`：Kokoro WebSocket/HTTP 地址、默认音色与格式。
-- `management.endpoints.web.exposure.include`：暴露 `health`、`info`、`prometheus`。
+- `ai.stt`：Sherpa WebSocket 地址、上传帧尺寸、结果等待超时。
+- `ai.llm`：Chat Completions 地址、模型、API Key、采样参数与系统提示词。
+- `ai.tts`：Kokoro HTTP 地址、默认音色、输出格式及采样参数。
 
 ## 关键实现细节
 
-- **并发**：
-  - STT、LLM、TTS 均使用独立线程池异步执行，避免阻塞 Netty I/O 线程。
-  - WebSocket 侧采用 `PipedInputStream` + 可配置缓冲区解耦上游推流与 STT 消费。
-
-- **流式编排**：
-  - STT interim → `interim_text`，final → `final_text`，并触发 LLM。
-  - LLM NDJSON 增量在句末切分（`。！？.!?`），逐句调用 TTS，音频以二进制帧推送。
-  - 每段播报完成后发送 `done`，异常时返回结构化 `error`。
-
-- **重试与超时**：
-  - OkHttp 统一配置连接/读取超时（STT 10 分钟、LLM/TTS 5 分钟）。
-  - 重试工具类 `RetryUtils` 提供指数退避策略，可在扩展实现中使用。
-
-- **监控与日志**：
-  - Micrometer + Prometheus，指标包括 `stt_segments_total`、`llm_tokens_total`、`tts_bytes_streamed_total`。
-  - 关键链路输出中文日志，便于运维排查。
+- **单接口编排**：`ConversationService` 顺序调用 STT→LLM→TTS，统一封装在 `ConversationResult` 中返回。
+- **解耦客户端**：每个后端服务使用独立模块封装，核心接口仅暴露同步方法，便于未来替换实现。
+- **语义历史**：对话历史在服务端/客户端之间以结构化形式传递，可轻松扩展多轮对话策略。
 
 ## 测试
 
-- `ai-common`：`TextUtilsTest` 覆盖句末判断逻辑。
-- `ai-llm`：`OllamaLlmServiceTest` 验证 Chat Completions 调用与消息体构造。
-- `ai-orchestrator`：`AiOrchestratorIntegrationTest` 通过 MockWebServer 模拟 LLM/TTS，验证从 STT 最终触发音频回推的全链路。
+- `ai-common`：`ConversationInputTest` 覆盖构建器约束。
+- `ai-llm`：`OllamaChatClientTest` 使用 MockWebServer 校验 Chat Completions 协议。
+- `ai-orchestrator`：`ConversationServiceTest` 与 `ConversationControllerTest` 验证编排逻辑和 REST 映射。
 
 执行全部测试：
 ```bash
@@ -106,6 +111,5 @@ mvn test
 
 ## 备注
 
-- 项目遵循生产级标准，所有核心类与方法均附带中文注释。
-- 若需自定义声学模型、语言模型或音色，可直接修改对应模块配置类或在外部配置文件中覆盖。
-- REST 接口默认返回 `text/plain`，如需 JSON，可在 `OfflineController` 调整 `produces` 配置。
+- 默认假定输入/输出均为 16kHz、单声道、16-bit PCM little-endian，如需其它格式，可调整配置或扩展转换逻辑。
+- 真实环境下建议引入鉴权、速率限制、日志脱敏等增强能力，本项目聚焦核心链路示例。

@@ -1,12 +1,10 @@
 package com.halliday.ai.llm.config;
 
-import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * Chat Completions 兼容 LLM 相关配置，通过 Spring Boot 配置文件注入。
  */
-@Data
 @ConfigurationProperties(prefix = "ai.llm")
 public class OllamaLlmProperties {
 
@@ -38,7 +36,7 @@ public class OllamaLlmProperties {
     /**
      * 默认系统提示词，用于引导模型风格。
      */
-    private String systemPrompt = "你是一个中文 AI 助手，回答自然简洁。";
+    private String systemPrompt = "You are an English AI assistant. Always respond in English with concise answers.";
 
     /**
      * HTTP 连接超时时间，毫秒。
@@ -49,4 +47,68 @@ public class OllamaLlmProperties {
      * HTTP 读取超时时间，毫秒。
      */
     private long readTimeoutMs = 300_000;
+
+    public String getBaseUrl() {
+        return baseUrl;
+    }
+
+    public void setBaseUrl(String baseUrl) {
+        this.baseUrl = baseUrl;
+    }
+
+    public String getModel() {
+        return model;
+    }
+
+    public void setModel(String model) {
+        this.model = model;
+    }
+
+    public String getApiKey() {
+        return apiKey;
+    }
+
+    public void setApiKey(String apiKey) {
+        this.apiKey = apiKey;
+    }
+
+    public double getTemperature() {
+        return temperature;
+    }
+
+    public void setTemperature(double temperature) {
+        this.temperature = temperature;
+    }
+
+    public double getTopP() {
+        return topP;
+    }
+
+    public void setTopP(double topP) {
+        this.topP = topP;
+    }
+
+    public String getSystemPrompt() {
+        return systemPrompt;
+    }
+
+    public void setSystemPrompt(String systemPrompt) {
+        this.systemPrompt = systemPrompt;
+    }
+
+    public long getConnectTimeoutMs() {
+        return connectTimeoutMs;
+    }
+
+    public void setConnectTimeoutMs(long connectTimeoutMs) {
+        this.connectTimeoutMs = connectTimeoutMs;
+    }
+
+    public long getReadTimeoutMs() {
+        return readTimeoutMs;
+    }
+
+    public void setReadTimeoutMs(long readTimeoutMs) {
+        this.readTimeoutMs = readTimeoutMs;
+    }
 }

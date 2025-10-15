@@ -4,19 +4,22 @@ ai:
   stt:
     wsUrl: "ws://127.0.0.1:8000/asr?samplerate=16000"
     frameBytes: 640
-    bufferSize: 65536
+    resultTimeoutMs: 5000
   llm:
     baseUrl: "http://127.0.0.1:3000/v1/chat/completions"
     model: "llama3.1"
-    apiKey: "${AI_LLM_API_KEY:}"
+#    apiKey: "${AI_LLM_API_KEY:}"
+    apiKey: "sk-MClhnrkTq8EyLdyk0y8ilytW4yx8yOj5oMNSvx03ckCfwMk7"
     temperature: 0.7
     topP: 1.0
-    systemPrompt: "你是一个中文 AI 助手，回答自然简洁。"
+    systemPrompt: "You are an English AI assistant. Always respond in English with concise answers."
   tts:
-    wsUrl: "ws://127.0.0.1:8880/v1/ws/tts/stream"
-    httpUrl: "http://127.0.0.1:8880/v1/audio/speech"
+    url: "http://127.0.0.1:8880/v1/audio/speech"
     voice: "af_heart"
     format: "pcm"
+    sampleRate: 16000
+    channels: 1
+    bitDepth: 16
 management:
   endpoints:
     web:

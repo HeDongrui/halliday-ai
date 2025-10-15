@@ -74,15 +74,15 @@
 <body>
 <div class="card">
     <h1>Halliday AI 能力体验</h1>
-    <p>请选择要体验的链路。离线页面用于通过音频 URL 调用 STT，实时页面支持麦克风输入，体验 STT → LLM → TTS 的连续对话能力。</p>
+    <p>请选择要体验的链路。离线页面用于通过音频 URL 调用 STT，实时页面会捕获麦克风音频并通过 REST 接口体验 STT → LLM → TTS 的连续对话能力。</p>
     <div class="links">
         <a class="card-link" href="stt-offline.html">
             <strong>离线转写（REST）</strong>
             <span>输入 WAV 地址，调用 /orchestrator/stt/offline 获取完整文本。</span>
         </a>
         <a class="card-link" href="realtime-conversation.html">
-            <strong>实时语音对话（WebSocket）</strong>
-            <span>使用麦克风持续推流，体验 STT → LLM → TTS 的循环流程。</span>
+            <strong>实时语音对话（REST）</strong>
+            <span>语音段落自动上传至 /api/conversation，返回文本与语音回复。</span>
         </a>
     </div>
 </div>

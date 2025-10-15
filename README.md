@@ -8,7 +8,12 @@
 语音（PCM16） → Sherpa ASR → 文本 → Chat Completions → 答案文本 → Kokoro TTS → 语音（PCM16）
 ```
 
-项目专注于**单轮/多轮语音对话**的基础能力，所有交互通过一个 REST 接口 `/api/conversation` 完成：
+项目专注于**单轮/多轮语音对话**的基础能力，提供 REST 与 WebSocket 两种交互方式：
+
+- `/api/conversation`：一次性上传音频（Base64）或文本，服务端完成 ASR→LLM→TTS 后返回完整结果。
+- `/ws/conversation`：前端通过 WebSocket 持续推送 PCM16 帧，服务端检测静默后触发 STT、流式返回 LLM 文本与 TTS 音频，播放完成后方可进入下一轮。
+
+REST 调用流程：
 
 1. 客户端上传音频（Base64）或直接提供文本。
 2. 服务端调用 Sherpa 完成语音识别。
@@ -78,6 +83,15 @@ halliday-ai/
    ```
 
    下次调用时，可直接把 `history` 原样带回，实现多轮语音对话。如果没有音频，亦可仅发送 `text` 字段从而进行纯文本对话。
+
+### WebSocket 实时对话
+
+`ai-orchestrator` 内置演示页 `realtime-conversation.html` 会通过 `/ws/conversation` 建立 WebSocket 连接，整体时序如下：
+
+1. 浏览器请求麦克风权限，并以目标采样率（默认 16kHz、单声道、16-bit PCM）推送 `audio` 帧；VAD 检测到静默 2 秒后发送 `stop` 信号。
+2. 服务端缓冲音频并调用 Sherpa STT，识别到文本后立即通过 `transcript` 消息返回；若为空则发送 `no_speech`，前端继续监听。
+3. STT 成功后进入 LLM 阶段，`assistant_text` 异步送达；随后触发 TTS，音频分片以 `tts_chunk` 流式下发，全部播放结束后 `tts_complete` 通知前端解锁下一次麦克风输入。
+4. 任意异常会以 `error` 消息通知前端，前端可选择重新开始会话。
 
 ## 配置说明
 

@@ -26,6 +26,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import java.io.IOException;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -36,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Component
 public class StreamingConversationHandler extends TextWebSocketHandler {
@@ -164,11 +166,21 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
 
     private void startStreamingStt(WebSocketSession session, SessionContext ctx) throws IOException {
         ctx.initAudioPipe();
+        ctx.asrStartMs = System.currentTimeMillis();
+        ObjectNode extra = mapper.createObjectNode();
+        extra.put("sampleRate", ctx.inputFormat.sampleRate());
+        extra.put("channels", ctx.inputFormat.channels());
+        extra.put("bitDepth", ctx.inputFormat.bitDepth());
+        sendDebug(session, "asr", "start", "ASR streaming started", ctx.asrStartMs, null, extra);
         executor.execute(() -> {
             try {
                 sttClient.streamRecognize(ctx.audioInput, result -> handleSttResult(session, ctx, result));
             } catch (Exception ex) {
                 log.warn("Streaming STT failed", ex);
+                long end = System.currentTimeMillis();
+                ObjectNode errorExtra = mapper.createObjectNode();
+                errorExtra.put("message", ex.getMessage());
+                sendDebug(session, "asr", "error", "Streaming STT failed", ctx.asrStartMs, end, errorExtra);
                 sendSafely(session, error("STT_ERROR", ex.getMessage()));
                 ctx.turnActive.set(false);
             }
@@ -185,6 +197,14 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             sendSafely(session, msg);
         }
         if (result.isFinished()) {
+            long end = System.currentTimeMillis();
+            ObjectNode extra = mapper.createObjectNode();
+            extra.put("final", true);
+            extra.put("length", text.length());
+            if (StringUtils.hasText(text)) {
+                extra.put("text", text);
+            }
+            sendDebug(session, "asr", "complete", "ASR streaming finished", ctx.asrStartMs, end, extra);
             finalizeTranscript(session, ctx);
         }
     }
@@ -210,6 +230,13 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         executor.execute(() -> {
             StringBuilder accumulated = new StringBuilder();
             StringBuilder pendingSentence = new StringBuilder();
+            ctx.llmStartMs = System.currentTimeMillis();
+            ObjectNode llmStartExtra = mapper.createObjectNode();
+            llmStartExtra.put("historySize", ctx.history.size());
+            llmStartExtra.put("userTextLength", userText.length());
+            llmStartExtra.put("userTextPreview", userText.length() > 160 ? userText.substring(0, 160) : userText);
+            llmStartExtra.set("requestHistory", toHistoryArray(ctx.history));
+            sendDebug(session, "llm", "start", "LLM streaming started", ctx.llmStartMs, null, llmStartExtra);
             try {
                 llmClient.streamChat(new ArrayList<>(ctx.history), delta -> {
                     if (!StringUtils.hasText(delta)) {
@@ -219,26 +246,47 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                     pendingSentence.append(delta);
                     sendSafely(session, assistantDelta(delta));
                     emitSentences(session, ctx, pendingSentence);
-                }, done -> {
+                }, completion -> {
+                    String done = completion.text();
                     String finalText = StringUtils.hasText(done) ? done : accumulated.toString();
                     if (StringUtils.hasText(finalText)) {
                         emitResidualSentence(session, ctx, pendingSentence);
                         ctx.history.add(new ConversationMessage(ConversationRole.ASSISTANT, finalText));
                     }
+                    long llmEnd = System.currentTimeMillis();
+                    ObjectNode llmExtra = mapper.createObjectNode();
+                    llmExtra.put("finalTextLength", finalText.length());
+                    llmExtra.put("responseText", finalText);
+                    if (completion.metadata() != null && !completion.metadata().isEmpty()) {
+                        llmExtra.set("metadata", mapper.valueToTree(completion.metadata()));
+                    }
+                    sendDebug(session, "llm", "complete", "LLM streaming finished", ctx.llmStartMs, llmEnd, llmExtra);
                     ctx.ttsChain.whenComplete((ignored, throwable) -> {
                         if (throwable != null) {
+                            ObjectNode ttsErrorExtra = mapper.createObjectNode();
+                            ttsErrorExtra.put("message", throwable.getMessage());
+                            sendDebug(session, "tts", "error", "TTS chain failed", ctx.ttsStartMs, System.currentTimeMillis(), ttsErrorExtra);
                             sendSafely(session, error("TTS_ERROR", throwable.getMessage()));
                         }
+                        long ttsEnd = System.currentTimeMillis();
                         ObjectNode complete = event("tts_complete");
                         complete.set("history", toHistoryArray(ctx.history));
                         complete.put("sampleRate", ttsProperties.getSampleRate());
                         complete.put("channels", ttsProperties.getChannels());
                         sendSafely(session, complete);
+                        if (ctx.ttsStartMs > 0) {
+                            ObjectNode ttsExtra = mapper.createObjectNode();
+                            ttsExtra.put("sentences", ctx.ttsIndex.get());
+                            sendDebug(session, "tts", "complete", "TTS playback finished", ctx.ttsStartMs, ttsEnd, ttsExtra);
+                        }
                         ctx.turnActive.set(false);
                         ctx.processing.set(false);
                     });
                 });
             } catch (Exception ex) {
+                ObjectNode errExtra = mapper.createObjectNode();
+                errExtra.put("message", ex.getMessage());
+                sendDebug(session, "llm", "error", "LLM streaming failed", ctx.llmStartMs, System.currentTimeMillis(), errExtra);
                 sendSafely(session, error("LLM_ERROR", ex.getMessage()));
                 ctx.turnActive.set(false);
                 ctx.processing.set(false);
@@ -266,36 +314,75 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
     }
 
     private void enqueueTts(WebSocketSession session, SessionContext ctx, String sentence) {
-        ctx.ttsChain = ctx.ttsChain.thenRunAsync(() -> streamSentenceTts(session, sentence), executor);
+        ctx.ttsChain = ctx.ttsChain.thenRunAsync(() -> streamSentenceTts(session, ctx, sentence), executor);
     }
 
-    private void streamSentenceTts(WebSocketSession session, String sentence) {
+    private void streamSentenceTts(WebSocketSession session, SessionContext ctx, String sentence) {
         AtomicBoolean delivered = new AtomicBoolean(false);
+        AtomicInteger chunkCount = new AtomicInteger();
         CompletableFuture<Void> completed = new CompletableFuture<>();
+        int sentenceIndex = ctx.ttsIndex.incrementAndGet();
+        long start = System.currentTimeMillis();
+        if (ctx.ttsStartMs == 0) {
+            ctx.ttsStartMs = start;
+        }
+        ObjectNode startExtra = mapper.createObjectNode();
+        startExtra.put("sentenceIndex", sentenceIndex);
+        startExtra.put("textLength", sentence.length());
+        startExtra.put("text", sentence);
+        startExtra.put("textPreview", sentence.length() > 160 ? sentence.substring(0, 160) : sentence);
+        sendDebug(session, "tts", "start", "Streaming TTS sentence", start, null, startExtra);
         try {
             streamingTtsClient.streamSynthesize(sentence, null, chunk -> {
                 if (chunk == null || chunk.length == 0) {
                     return;
                 }
                 delivered.set(true);
+                chunkCount.incrementAndGet();
                 sendAudioChunk(session, chunk, ttsProperties.getSampleRate(), ttsProperties.getChannels());
             }, () -> completed.complete(null));
             completed.join();
         } catch (Exception ex) {
             log.warn("Streaming TTS failed, fallback to blocking synth", ex);
+            long errorTime = System.currentTimeMillis();
+            ObjectNode errorExtra = mapper.createObjectNode();
+            errorExtra.put("sentenceIndex", sentenceIndex);
+            errorExtra.put("message", ex.getMessage());
+            sendDebug(session, "tts", "error", "Streaming TTS failed", start, errorTime, errorExtra);
             completed.completeExceptionally(ex);
         }
 
         if (!delivered.get()) {
+            long fallbackStart = System.currentTimeMillis();
+            ObjectNode fallbackExtra = mapper.createObjectNode();
+            fallbackExtra.put("sentenceIndex", sentenceIndex);
+            fallbackExtra.put("textLength", sentence.length());
+            fallbackExtra.put("textPreview", sentence.length() > 160 ? sentence.substring(0, 160) : sentence);
+            sendDebug(session, "tts", "fallback-start", "Fallback TTS synthesize", fallbackStart, null, fallbackExtra);
             try {
                 byte[] audio = blockingTtsClient.synthesize(sentence, null);
                 if (audio != null && audio.length > 0) {
                     log.debug("Fallback TTS used for sentence: {}", sentence);
                     chunkAndSendAudio(session, audio);
+                    long fallbackEnd = System.currentTimeMillis();
+                    fallbackExtra.put("bytes", audio.length);
+                    sendDebug(session, "tts", "fallback-complete", "Fallback TTS finished", fallbackStart, fallbackEnd, fallbackExtra);
                 }
             } catch (Exception ex) {
+                ObjectNode fallbackError = mapper.createObjectNode();
+                fallbackError.put("sentenceIndex", sentenceIndex);
+                fallbackError.put("textLength", sentence.length());
+                fallbackError.put("message", ex.getMessage());
+                sendDebug(session, "tts", "fallback-error", "Fallback TTS failed", fallbackStart, System.currentTimeMillis(), fallbackError);
                 sendSafely(session, error("TTS_ERROR", ex.getMessage()));
             }
+        } else {
+            long end = System.currentTimeMillis();
+            ObjectNode completeExtra = mapper.createObjectNode();
+            completeExtra.put("sentenceIndex", sentenceIndex);
+            completeExtra.put("chunks", chunkCount.get());
+            completeExtra.put("textLength", sentence.length());
+            sendDebug(session, "tts", "sentence-complete", "Streaming TTS sentence finished", start, end, completeExtra);
         }
     }
 
@@ -327,6 +414,35 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         node.put("audioBase64", Base64.getEncoder().encodeToString(chunk));
         node.put("sampleRate", sampleRate);
         node.put("channels", channels);
+        sendSafely(session, node);
+    }
+
+    private void sendDebug(WebSocketSession session,
+                           String stage,
+                           String status,
+                           String message,
+                           Long startMillis,
+                           Long endMillis,
+                           ObjectNode extra) {
+        ObjectNode node = event("debug");
+        node.put("timestamp", Instant.now().toString());
+        node.put("stage", stage);
+        node.put("status", status);
+        if (StringUtils.hasText(message)) {
+            node.put("message", message);
+        }
+        if (startMillis != null && startMillis > 0) {
+            node.put("startTime", Instant.ofEpochMilli(startMillis).toString());
+        }
+        if (endMillis != null && endMillis > 0) {
+            node.put("endTime", Instant.ofEpochMilli(endMillis).toString());
+        }
+        if (startMillis != null && endMillis != null && startMillis > 0 && endMillis >= startMillis) {
+            node.put("durationMs", endMillis - startMillis);
+        }
+        if (extra != null && extra.size() > 0) {
+            node.set("extra", extra);
+        }
         sendSafely(session, node);
     }
 
@@ -423,10 +539,18 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         PipedOutputStream audioOutput;
         final StringBuilder transcriptBuffer = new StringBuilder();
         CompletableFuture<Void> ttsChain = CompletableFuture.completedFuture(null);
+        long asrStartMs;
+        long llmStartMs;
+        long ttsStartMs;
+        final AtomicInteger ttsIndex = new AtomicInteger();
 
         void resetTurn() {
             transcriptBuffer.setLength(0);
             ttsChain = CompletableFuture.completedFuture(null);
+            asrStartMs = 0L;
+            llmStartMs = 0L;
+            ttsStartMs = 0L;
+            ttsIndex.set(0);
         }
 
         void initAudioPipe() throws IOException {

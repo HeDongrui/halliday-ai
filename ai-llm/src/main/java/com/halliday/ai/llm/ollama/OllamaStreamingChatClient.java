@@ -1,5 +1,6 @@
 package com.halliday.ai.llm.ollama;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.halliday.ai.common.conversation.ConversationMessage;
@@ -20,6 +21,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -43,14 +45,22 @@ public class OllamaStreamingChatClient implements StreamingLanguageModelClient {
                 .build();
     }
 
+//    @Override
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
+
     @Override
-    public void streamChat(List<ConversationMessage> history, Consumer<String> onDelta, Consumer<String> onComplete) {
+    public void streamChat(List<ConversationMessage> history,
+                           Consumer<String> onDelta,
+                           Consumer<StreamingLanguageModelClient.Completion> onComplete) {
         try {
             Map<String, Object> payload = new HashMap<>();
             payload.put("model", properties.getModel());
             payload.put("temperature", properties.getTemperature());
             payload.put("top_p", properties.getTopP());
             payload.put("stream", true);
+            Map<String, Object> streamOptions = new HashMap<>();
+            streamOptions.put("include_usage", true);
+            payload.put("stream_options", streamOptions);
             payload.put("messages", serializeMessages(history));
 
             RequestBody body = RequestBody.create(mapper.writeValueAsBytes(payload), JSON);
@@ -64,6 +74,9 @@ public class OllamaStreamingChatClient implements StreamingLanguageModelClient {
                     throw new AiServiceException("LLM streaming failed with status " + response.code());
                 }
                 StringBuilder complete = new StringBuilder();
+                Map<String, Object> metadata = new LinkedHashMap<>();
+                List<String> rawEvents = new ArrayList<>();
+                metadata.put("events", rawEvents);
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(Objects.requireNonNull(response.body()).byteStream(), StandardCharsets.UTF_8))) {
                     String line;
                     while ((line = reader.readLine()) != null) {
@@ -74,6 +87,7 @@ public class OllamaStreamingChatClient implements StreamingLanguageModelClient {
                         if ("[DONE]".equals(json)) {
                             break;
                         }
+                        rawEvents.add(json);
                         JsonNode root = mapper.readTree(json);
                         JsonNode choices = root.path("choices");
                         if (choices.isArray() && !choices.isEmpty()) {
@@ -83,10 +97,49 @@ public class OllamaStreamingChatClient implements StreamingLanguageModelClient {
                                 complete.append(content);
                                 onDelta.accept(content);
                             }
+                            String finish = choices.get(0).path("finish_reason").asText("");
+                            if (StringUtils.hasText(finish)) {
+                                metadata.put("finish_reason", finish);
+                            }
+                        }
+                        if (root.hasNonNull("usage")) {
+                            metadata.put("usage", mapper.convertValue(root.get("usage"), MAP_TYPE));
+                        }
+                        if (root.hasNonNull("created")) {
+                            metadata.put("created", root.get("created").asLong());
+                        }
+                        if (root.hasNonNull("id")) {
+                            metadata.putIfAbsent("id", root.get("id").asText());
+                        }
+                        if (root.hasNonNull("model")) {
+                            metadata.putIfAbsent("model", root.get("model").asText());
+                        }
+                        if (root.path("done").asBoolean(false)) {
+                            metadata.put("done", true);
+                            metadata.put("done_reason", root.path("done_reason").asText(""));
+                            if (root.hasNonNull("total_duration")) {
+                                metadata.put("total_duration", root.get("total_duration").asLong());
+                            }
+                            if (root.hasNonNull("load_duration")) {
+                                metadata.put("load_duration", root.get("load_duration").asLong());
+                            }
+                            if (root.hasNonNull("prompt_eval_count")) {
+                                metadata.put("prompt_eval_count", root.get("prompt_eval_count").asLong());
+                            }
+                            if (root.hasNonNull("prompt_eval_duration")) {
+                                metadata.put("prompt_eval_duration", root.get("prompt_eval_duration").asLong());
+                            }
+                            if (root.hasNonNull("eval_count")) {
+                                metadata.put("eval_count", root.get("eval_count").asLong());
+                            }
+                            if (root.hasNonNull("eval_duration")) {
+                                metadata.put("eval_duration", root.get("eval_duration").asLong());
+                            }
+                            break;
                         }
                     }
                 }
-                onComplete.accept(complete.toString());
+                onComplete.accept(new StreamingLanguageModelClient.Completion(complete.toString(), metadata));
             }
         } catch (IOException ex) {
             throw new AiServiceException("Failed to stream LLM response", ex);

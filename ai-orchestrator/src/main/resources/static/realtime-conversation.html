@@ -518,6 +518,9 @@
                     queuePlaybackStep(() => schedulePlaybackChunk(data));
                 }
                 break;
+            case 'debug':
+                logDebugMessage(data);
+                break;
             case 'tts_complete':
                 if (Array.isArray(data.history)) {
                     conversationHistory = data.history;
@@ -601,6 +604,78 @@
             .catch(error => {
                 log(`播放队列错误：${error.message || error}`);
             });
+    }
+
+    function logDebugMessage(data) {
+        if (!data || typeof data !== 'object') {
+            return;
+        }
+        const stage = typeof data.stage === 'string' ? data.stage.toUpperCase() : 'DEBUG';
+        const status = typeof data.status === 'string' ? data.status.toUpperCase() : '';
+        let message = status ? `${stage} ${status}` : stage;
+        if (data.message) {
+            message += ` - ${data.message}`;
+        }
+        const timing = [];
+        if (data.startTime) {
+            timing.push(`start=${formatDebugTime(data.startTime)}`);
+        }
+        if (data.endTime) {
+            timing.push(`end=${formatDebugTime(data.endTime)}`);
+        }
+        const duration = Number(data.durationMs);
+        if (Number.isFinite(duration) && duration >= 0) {
+            timing.push(`duration=${Math.round(duration)}ms`);
+        }
+        if (timing.length > 0) {
+            message += ` [${timing.join(', ')}]`;
+        }
+        const usageInfo = extractTokenUsage(data.extra);
+        if (usageInfo) {
+            message += ` | tokens: ${usageInfo}`;
+        }
+        if (data.extra) {
+            try {
+                message += ` | ${JSON.stringify(data.extra)}`;
+            } catch (_) {
+                message += ' | extra:<unserializable>';
+            }
+        }
+        log(message);
+    }
+
+    function formatDebugTime(isoString) {
+        const date = new Date(isoString);
+        if (Number.isNaN(date.getTime())) {
+            return isoString;
+        }
+        const time = date.toLocaleTimeString();
+        const millis = String(date.getMilliseconds()).padStart(3, '0');
+        return `${time}.${millis}`;
+    }
+
+    function extractTokenUsage(extra) {
+        if (!extra || typeof extra !== 'object') {
+            return '';
+        }
+        const usage = extra.usage;
+        if (!usage || typeof usage !== 'object') {
+            return '';
+        }
+        const parts = [];
+        const prompt = Number(usage.prompt_tokens);
+        if (Number.isFinite(prompt)) {
+            parts.push(`prompt=${prompt}`);
+        }
+        const completion = Number(usage.completion_tokens);
+        if (Number.isFinite(completion)) {
+            parts.push(`completion=${completion}`);
+        }
+        const total = Number(usage.total_tokens);
+        if (Number.isFinite(total)) {
+            parts.push(`total=${total}`);
+        }
+        return parts.join(', ');
     }
 
     function schedulePlaybackChunk(message) {

@@ -1,0 +1,20 @@
+server:
+  port: 9099
+ai:
+  stt:
+    wsUrl: "ws://127.0.0.1:8000/asr?samplerate=16000"
+    frameBytes: 640
+    bufferSize: 65536
+  llm:
+    baseUrl: "http://127.0.0.1:11434"
+    model: "qwen3:latest"
+  tts:
+    wsUrl: "ws://127.0.0.1:8880/v1/ws/tts/stream"
+    httpUrl: "http://127.0.0.1:8880/v1/audio/speech"
+    voice: "af_heart"
+    format: "pcm"
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "health,info,prometheus"

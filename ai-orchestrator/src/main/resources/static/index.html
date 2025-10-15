@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Halliday AI 离线语音转写体验</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            font-family: "Segoe UI", "Helvetica Neue", Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", sans-serif;
+            background-color: #0d1117;
+            color: #e6edf3;
+        }
+        body {
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 2.5rem 1.25rem;
+            box-sizing: border-box;
+        }
+        .card {
+            width: min(720px, 100%);
+            background: rgba(13, 17, 23, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 18px;
+            padding: 2.5rem;
+            box-shadow: 0 18px 36px rgba(15, 23, 42, 0.45);
+            backdrop-filter: blur(14px);
+        }
+        h1 {
+            font-size: clamp(1.75rem, 1.1rem + 2vw, 2.75rem);
+            margin: 0 0 1.5rem;
+            letter-spacing: 0.02em;
+        }
+        p {
+            margin: 0 0 1.5rem;
+            line-height: 1.75;
+            color: rgba(230, 237, 243, 0.78);
+        }
+        label {
+            display: block;
+            margin-bottom: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+        }
+        input[type="url"] {
+            width: 100%;
+            padding: 0.85rem 1rem;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(2, 6, 23, 0.65);
+            color: inherit;
+            font-size: 1rem;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+        input[type="url"]:focus {
+            outline: none;
+            border-color: rgba(99, 179, 237, 0.85);
+            box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.15);
+        }
+        button {
+            margin-top: 1.5rem;
+            padding: 0.9rem 1.6rem;
+            border-radius: 12px;
+            border: none;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            background: linear-gradient(135deg, #60a5fa, #818cf8);
+            color: #0b1120;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 10px 24px rgba(96, 165, 250, 0.35);
+        }
+        pre {
+            margin-top: 1.75rem;
+            padding: 1.4rem;
+            border-radius: 14px;
+            background: rgba(2, 6, 23, 0.8);
+            border: 1px solid rgba(59, 130, 246, 0.25);
+            color: rgba(224, 231, 255, 0.92);
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        small {
+            display: block;
+            margin-top: 0.75rem;
+            color: rgba(148, 163, 184, 0.8);
+        }
+        .api-info {
+            margin-top: 2rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        a {
+            color: #93c5fd;
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <h1>离线语音转写接口体验</h1>
+    <p>在下方输入 WAV 文件的公网访问地址，点击“发起转写”即可调用 <code>/orchestrator/stt/offline</code> 接口，获取完整的转写文本。</p>
+    <form id="transcribe-form">
+        <label for="wav-url">WAV 文件地址</label>
+        <input id="wav-url" name="wavUrl" type="url" placeholder="https://example.com/audio.wav" required>
+        <button type="submit">发起转写</button>
+    </form>
+    <pre id="result" hidden>等待请求...</pre>
+    <div class="api-info">
+        <strong>接口说明</strong>
+        <p>
+            <code>GET /orchestrator/stt/offline?wavUrl=</code> 接收一个可访问的 WAV 文件地址，返回识别出的文本。<br>
+            示例请求：<br>
+            <code>curl -G "${location.origin}/orchestrator/stt/offline" --data-urlencode "wavUrl=https://example.com/audio.wav"</code>
+        </p>
+        <small>如需查看应用运行状况，可访问 <a href="/actuator/health">/actuator/health</a>。</small>
+    </div>
+</div>
+<script>
+    const form = document.getElementById('transcribe-form');
+    const result = document.getElementById('result');
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const formData = new FormData(form);
+        const wavUrl = formData.get('wavUrl');
+        result.hidden = false;
+        result.textContent = '正在请求接口...';
+
+        try {
+            const response = await fetch(`/orchestrator/stt/offline?wavUrl=${encodeURIComponent(wavUrl)}`);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status} ${response.statusText}`);
+            }
+            const text = await response.text();
+            result.textContent = text.trim() ? text : '接口返回为空';
+        } catch (error) {
+            result.textContent = `调用失败：${error.message}`;
+        }
+    });
+</script>
+</body>
+</html>

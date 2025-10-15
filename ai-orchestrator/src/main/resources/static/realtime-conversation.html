@@ -211,14 +211,24 @@
     let processor = null;
     let playbackContext = null;
     let playbackTime = 0;
+    let playbackQueue = Promise.resolve();
 
     let resampleBuffer = [];
-    let recordedChunks = [];
     let sampleRateRatio = 1;
     let recordingActive = false;
     let awaitingReply = false;
     let lastVoiceTime = 0;
+    let hasSentAudio = false;
+
     let conversationHistory = [];
+
+    let socket = null;
+    let socketReady = false;
+    let pendingReadyResolve = null;
+    let pendingReadyReject = null;
+
+    startBtn.addEventListener('click', startExperience);
+    stopBtn.addEventListener('click', stopExperience);
 
     function log(message) {
         const time = new Date().toLocaleTimeString();
@@ -236,10 +246,8 @@
         logEl.textContent = '';
         conversationHistory = [];
         playbackTime = 0;
+        playbackQueue = Promise.resolve();
     }
-
-    startBtn.addEventListener('click', startExperience);
-    stopBtn.addEventListener('click', stopExperience);
 
     async function startExperience() {
         if (recordingActive || awaitingReply) {
@@ -247,14 +255,18 @@
         }
         resetUi();
         resampleBuffer = [];
-        recordedChunks = [];
+        sampleRateRatio = 1;
+        hasSentAudio = false;
         startBtn.disabled = true;
         sttRateInput.disabled = true;
         stopBtn.disabled = false;
-        setStatus('初始化麦克风...');
+        setStatus('连接服务中...');
         try {
+            await connectWebSocket();
+            sendStartMessage();
             await setupMicrophone();
             recordingActive = true;
+            awaitingReply = false;
             lastVoiceTime = performance.now();
             setStatus('请开始讲话');
             log('麦克风初始化完成，等待语音输入');
@@ -269,7 +281,7 @@
         recordingActive = false;
         awaitingReply = false;
         resampleBuffer = [];
-        recordedChunks = [];
+        hasSentAudio = false;
         startBtn.disabled = false;
         sttRateInput.disabled = false;
         stopBtn.disabled = true;
@@ -286,13 +298,76 @@
             mediaStream.getTracks().forEach(track => track.stop());
             mediaStream = null;
         }
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            try {
+                socket.send(JSON.stringify({ type: 'reset_history' }));
+            } catch (_) {}
+            socket.close();
+        }
+        socketReady = false;
         if (playbackContext) {
             try { playbackContext.close(); } catch (_) {}
             playbackContext = null;
         }
         playbackTime = 0;
+        playbackQueue = Promise.resolve();
         setStatus('未连接');
         log('对话已结束');
+    }
+
+    async function connectWebSocket() {
+        if (socket && socket.readyState === WebSocket.OPEN && socketReady) {
+            return;
+        }
+        if (socket && socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
+            socket.close();
+        }
+        const url = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/conversation`;
+        socket = new WebSocket(url);
+        socketReady = false;
+        socket.addEventListener('message', handleSocketMessage);
+        socket.addEventListener('open', () => {
+            log('WebSocket 连接已建立');
+        });
+        socket.addEventListener('close', (event) => {
+            socketReady = false;
+            log(`WebSocket 已关闭 (code=${event.code})`);
+            if (pendingReadyReject) {
+                pendingReadyReject(new Error('WebSocket 连接已关闭'));
+            }
+            pendingReadyResolve = null;
+            pendingReadyReject = null;
+            if (recordingActive || awaitingReply) {
+                setStatus('连接已断开');
+            }
+        });
+        socket.addEventListener('error', () => {
+            log('WebSocket 发生错误');
+            if (pendingReadyReject) {
+                pendingReadyReject(new Error('WebSocket 连接错误'));
+            }
+            pendingReadyResolve = null;
+            pendingReadyReject = null;
+        });
+        await new Promise((resolve, reject) => {
+            pendingReadyResolve = resolve;
+            pendingReadyReject = reject;
+        });
+    }
+
+    function sendStartMessage() {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            throw new Error('WebSocket 未就绪');
+        }
+        const payload = {
+            type: 'start',
+            sampleRate: targetSampleRate(),
+            channels: 1,
+            bitDepth: 16,
+            history: conversationHistory
+        };
+        socket.send(JSON.stringify(payload));
+        log('已发送 start 消息');
     }
 
     async function setupMicrophone() {
@@ -305,10 +380,9 @@
         processor = captureContext.createScriptProcessor(4096, 1, 1);
         sampleRateRatio = captureContext.sampleRate / targetSampleRate();
         resampleBuffer = [];
-        recordedChunks = [];
 
         processor.onaudioprocess = (event) => {
-            if (!recordingActive) {
+            if (!recordingActive || awaitingReply) {
                 return;
             }
             const input = event.inputBuffer.getChannelData(0);
@@ -353,108 +427,117 @@
         }
         const consumed = Math.floor(available * sampleRateRatio);
         resampleBuffer = resampleBuffer.slice(consumed);
-        recordedChunks.push(output);
-        const meanSquare = energy / output.length;
+        const meanSquare = output.length === 0 ? 0 : energy / output.length;
+        if (output.length > 0) {
+            sendAudioChunk(output);
+        }
         handleVad(meanSquare);
     }
 
+    function sendAudioChunk(int16) {
+        if (!socketReady || !socket || socket.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        const chunkBase64 = encodePcm16ToBase64(int16);
+        socket.send(JSON.stringify({ type: 'audio', chunk: chunkBase64 }));
+        hasSentAudio = true;
+    }
+
     function handleVad(meanSquare) {
-        if (!recordingActive) {
+        if (!recordingActive || awaitingReply) {
             return;
         }
         if (meanSquare > vadThreshold * vadThreshold) {
             lastVoiceTime = performance.now();
             setStatus('检测到语音输入');
-        } else {
+        } else if (hasSentAudio) {
             const elapsed = performance.now() - lastVoiceTime;
-            if (elapsed > vadSilenceMs && recordedChunks.length > 0) {
+            if (elapsed > vadSilenceMs) {
                 finalizeSegment();
             }
         }
     }
 
     function finalizeSegment() {
-        if (awaitingReply || recordedChunks.length === 0) {
-            return;
-        }
-        const pcm = mergeChunks(recordedChunks);
-        if (pcm.length === 0) {
-            recordedChunks = [];
+        if (awaitingReply) {
             return;
         }
         awaitingReply = true;
         recordingActive = false;
-        recordedChunks = [];
         resampleBuffer = [];
         setStatus('等待模型回复...');
-        log('检测到语音段落结束，准备上传');
-        uploadConversation(pcm).catch(error => {
-            log(`调用失败：${error.message}`);
-            setStatus('调用失败，请重试');
-            awaitingReply = false;
-            recordingActive = true;
-            lastVoiceTime = performance.now();
-        });
-    }
-
-    function mergeChunks(chunks) {
-        const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-        const merged = new Int16Array(total);
-        let offset = 0;
-        for (const chunk of chunks) {
-            merged.set(chunk, offset);
-            offset += chunk.length;
+        log('检测到语音段落结束，发送 stop 信号');
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'stop' }));
         }
-        return merged;
+        hasSentAudio = false;
     }
 
-    async function uploadConversation(pcm) {
-        const base64 = encodePcm16ToBase64(pcm);
-        log(`上传音频，长度 ${(pcm.length / targetSampleRate()).toFixed(2)} 秒`);
-        const payload = {
-            audioBase64: base64,
-            sampleRate: targetSampleRate(),
-            channels: 1,
-            bitDepth: 16,
-            history: conversationHistory
-        };
-        const response = await fetch('/api/conversation', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        if (response.status === 204) {
-            log('未识别到有效语音内容，继续监听下一次发言');
-            awaitingReply = false;
-            recordingActive = true;
-            lastVoiceTime = performance.now();
-            setStatus('请继续讲话');
+    function handleSocketMessage(event) {
+        let data;
+        try {
+            data = JSON.parse(event.data);
+        } catch (error) {
+            log(`无法解析服务端消息：${error}`);
             return;
         }
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+        switch (data.type) {
+            case 'ready':
+                socketReady = true;
+                log('服务端会话已就绪');
+                setStatus('服务已连接');
+                if (pendingReadyResolve) {
+                    pendingReadyResolve();
+                }
+                pendingReadyResolve = null;
+                pendingReadyReject = null;
+                break;
+            case 'listening':
+                log('服务端准备接收音频');
+                setStatus('请开始讲话');
+                break;
+            case 'transcript':
+                if (data.text) {
+                    appendBubble(transcriptEl, 'user', data.text);
+                    log(`识别文本：${data.text}`);
+                }
+                break;
+            case 'assistant_text':
+                if (data.text) {
+                    appendBubble(replyEl, 'assistant', data.text);
+                    log(`助手回复：${data.text}`);
+                }
+                break;
+            case 'tts_chunk':
+                if (data.audioBase64) {
+                    queuePlaybackStep(() => schedulePlaybackChunk(data));
+                }
+                break;
+            case 'tts_complete':
+                if (Array.isArray(data.history)) {
+                    conversationHistory = data.history;
+                }
+                queuePlaybackStep(async () => {
+                    awaitingReply = false;
+                    recordingActive = true;
+                    lastVoiceTime = performance.now();
+                    setStatus('请继续讲话');
+                });
+                break;
+            case 'no_speech':
+                awaitingReply = false;
+                recordingActive = true;
+                lastVoiceTime = performance.now();
+                setStatus('未识别到语音，请继续讲话');
+                log('ASR 未识别到内容');
+                break;
+            case 'error':
+                log(`服务端错误：${data.code || ''} ${data.message || ''}`.trim());
+                break;
+            default:
+                log(`收到未知类型消息：${data.type}`);
+                break;
         }
-        const result = await response.json();
-        await handleConversationResult(result);
-    }
-
-    async function handleConversationResult(result) {
-        if (result.userText) {
-            appendBubble(transcriptEl, 'user', result.userText);
-            log(`识别文本：${result.userText}`);
-        }
-        if (result.assistantText) {
-            appendBubble(replyEl, 'assistant', result.assistantText);
-            log(`助手回复：${result.assistantText}`);
-        }
-        if (Array.isArray(result.history)) {
-            conversationHistory = result.history;
-        }
-        await playAssistantAudio(result.assistantAudioBase64, result.sampleRate, result.channels);
-        awaitingReply = false;
-        recordingActive = true;
-        lastVoiceTime = performance.now();
-        setStatus('请继续讲话');
     }
 
     function appendBubble(container, role, text) {
@@ -465,31 +548,40 @@
         container.scrollTop = container.scrollHeight;
     }
 
-    async function playAssistantAudio(base64, sampleRate, channels) {
-        if (!base64 || base64.length === 0) {
-            log('无音频回复，跳过播放');
+    function queuePlaybackStep(step) {
+        playbackQueue = playbackQueue
+            .then(() => step())
+            .catch(error => {
+                log(`播放队列错误：${error.message || error}`);
+            });
+    }
+
+    async function schedulePlaybackChunk(message) {
+        const sr = Number(message.sampleRate) || targetSampleRate();
+        const channels = Math.max(1, Number(message.channels) || 1);
+        const int16 = decodeBase64ToInt16(message.audioBase64);
+        if (int16.length === 0) {
             return;
         }
-        const int16 = decodeBase64ToInt16(base64);
-        const sr = Number(sampleRate) || targetSampleRate();
         if (!playbackContext) {
             playbackContext = new (window.AudioContext || window.webkitAudioContext)();
         }
         if (playbackContext.state === 'suspended') {
             await playbackContext.resume();
         }
-        const context = playbackContext;
-        const frameCount = int16.length / Math.max(1, channels || 1);
-        const buffer = context.createBuffer(1, frameCount, sr);
-        const output = buffer.getChannelData(0);
-        for (let i = 0; i < frameCount; i++) {
-            output[i] = int16[i] / 0x7fff;
+        const frameCount = Math.floor(int16.length / channels);
+        const buffer = playbackContext.createBuffer(channels, frameCount, sr);
+        for (let channel = 0; channel < channels; channel++) {
+            const channelData = buffer.getChannelData(channel);
+            for (let i = 0; i < frameCount; i++) {
+                channelData[i] = int16[i * channels + channel] / 0x7fff;
+            }
         }
-        return new Promise((resolve) => {
-            const source = context.createBufferSource();
+        await new Promise((resolve) => {
+            const source = playbackContext.createBufferSource();
             source.buffer = buffer;
-            source.connect(context.destination);
-            const startAt = Math.max(context.currentTime, playbackTime);
+            source.connect(playbackContext.destination);
+            const startAt = Math.max(playbackContext.currentTime, playbackTime);
             source.start(startAt);
             playbackTime = startAt + buffer.duration;
             source.addEventListener('ended', resolve, { once: true });

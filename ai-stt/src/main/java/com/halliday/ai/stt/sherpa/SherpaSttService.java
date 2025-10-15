@@ -201,19 +201,22 @@ public class SherpaSttService implements SttService {
         private SttResult parseResult(String payload) throws IOException {
             JsonNode node = objectMapper.readTree(payload);
             String type = node.path("type").asText("");
-            if (type.isEmpty()) {
-                return null;
-            }
+            boolean hasType = !type.isEmpty();
+            boolean finished = (hasType && isFinalType(type))
+                    || node.path("finished").asBoolean(false)
+                    || node.path("final").asBoolean(false)
+                    || node.path("is_final").asBoolean(false);
 
-            boolean finished = isFinalType(type) || node.path("finished").asBoolean(false)
-                    || node.path("final").asBoolean(false) || node.path("is_final").asBoolean(false);
-
-            if (!isResultType(type) && !finished) {
+            if (hasType && !isResultType(type) && !finished) {
                 return null;
             }
 
             String text = extractText(node);
             int idx = extractSegmentIndex(node);
+
+            if (!hasType && text.isEmpty() && idx == 0 && !node.has("segment")) {
+                return null;
+            }
 
             return SttResult.builder()
                     .text(text)

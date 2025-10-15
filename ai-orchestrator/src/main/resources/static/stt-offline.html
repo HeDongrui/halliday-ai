@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>离线语音转写体验</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            font-family: "Segoe UI", "Helvetica Neue", Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", sans-serif;
+            background-color: #0d1117;
+            color: #e6edf3;
+        }
+        body {
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 2.5rem 1.25rem;
+            box-sizing: border-box;
+        }
+        .card {
+            width: min(720px, 100%);
+            background: rgba(13, 17, 23, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 18px;
+            padding: 2.75rem 2.5rem;
+            box-shadow: 0 20px 38px rgba(15, 23, 42, 0.45);
+            backdrop-filter: blur(14px);
+        }
+        h1 {
+            font-size: clamp(1.85rem, 1.2rem + 1.8vw, 2.75rem);
+            margin: 0 0 1.75rem;
+            letter-spacing: 0.02em;
+        }
+        p {
+            margin: 0 0 2rem;
+            line-height: 1.75;
+            color: rgba(230, 237, 243, 0.78);
+        }
+        label {
+            display: block;
+            margin-bottom: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+        }
+        input[type="url"] {
+            width: 100%;
+            padding: 0.85rem 1rem;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(2, 6, 23, 0.65);
+            color: inherit;
+            font-size: 1rem;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+        input[type="url"]:focus {
+            outline: none;
+            border-color: rgba(99, 179, 237, 0.85);
+            box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.15);
+        }
+        button {
+            margin-top: 1.5rem;
+            padding: 0.9rem 1.6rem;
+            border-radius: 12px;
+            border: none;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            background: linear-gradient(135deg, #60a5fa, #818cf8);
+            color: #0b1120;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 10px 24px rgba(96, 165, 250, 0.35);
+        }
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        pre {
+            margin-top: 1.75rem;
+            padding: 1.4rem;
+            border-radius: 14px;
+            background: rgba(2, 6, 23, 0.8);
+            border: 1px solid rgba(59, 130, 246, 0.25);
+            color: rgba(224, 231, 255, 0.92);
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .nav-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            margin-bottom: 1.5rem;
+            color: rgba(148, 163, 184, 0.85);
+            text-decoration: none;
+        }
+        .nav-link::before {
+            content: "←";
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <a class="nav-link" href="index.html">返回首页</a>
+    <h1>离线语音转写</h1>
+    <p>输入 WAV 文件的公网访问地址，页面将调用 <code>/orchestrator/stt/offline</code> 接口返回识别结果。</p>
+    <form id="transcribe-form">
+        <label for="wav-url">WAV 文件地址</label>
+        <input id="wav-url" name="wavUrl" type="url" placeholder="https://example.com/audio.wav" required>
+        <button id="submit" type="submit">发起转写</button>
+    </form>
+    <pre id="result" hidden>等待请求...</pre>
+</div>
+<script>
+    const form = document.getElementById('transcribe-form');
+    const submit = document.getElementById('submit');
+    const result = document.getElementById('result');
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const formData = new FormData(form);
+        const wavUrl = formData.get('wavUrl');
+        result.hidden = false;
+        result.textContent = '正在请求接口...';
+        submit.disabled = true;
+
+        try {
+            const response = await fetch(`/orchestrator/stt/offline?wavUrl=${encodeURIComponent(wavUrl)}`);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status} ${response.statusText}`);
+            }
+            const text = await response.text();
+            result.textContent = text.trim() ? text : '接口返回为空';
+        } catch (error) {
+            result.textContent = `调用失败：${error.message}`;
+        } finally {
+            submit.disabled = false;
+        }
+    });
+</script>
+</body>
+</html>

@@ -169,7 +169,7 @@
 <div class="card">
     <a class="nav-link" href="index.html">返回首页</a>
     <h1>实时语音对话</h1>
-    <p>点击“开始体验”后，浏览器会请求麦克风权限并捕获 PCM16LE 音频。检测到一次语音段落并静默 2 秒后，页面会将音频通过 REST 接口 <code>/api/conversation</code> 上传，服务端完成 ASR → LLM → TTS，并返回文本与语音回复。播放结束后即可进入下一轮对话。</p>
+    <p>点击“开始体验”后，浏览器会请求麦克风权限并将 PCM16LE 音频通过 WebSocket 接口 <code>/ws/conversation</code> 流式发送。静默 2 秒触发 VAD 后，服务端完成 ASR → LLM → TTS 全链路流式处理，前端立即展示增量文本并播放返回的语音流。</p>
     <div class="controls">
         <label class="inline">STT 目标采样率
             <input id="stt-rate" type="number" value="16000" min="8000" max="48000" step="1000">
@@ -212,9 +212,8 @@
     let playbackContext = null;
     let playbackTime = 0;
     let playbackQueue = Promise.resolve();
-    let pendingTtsPcm = [];
-    let pendingTtsSampleRate = null;
-    let pendingTtsChannels = null;
+    let currentUserBubble = null;
+    let currentAssistantBubble = null;
 
     let resampleBuffer = [];
     let sampleRateRatio = 1;
@@ -250,9 +249,8 @@
         conversationHistory = [];
         playbackTime = 0;
         playbackQueue = Promise.resolve();
-        pendingTtsPcm = [];
-        pendingTtsSampleRate = null;
-        pendingTtsChannels = null;
+        currentUserBubble = null;
+        currentAssistantBubble = null;
     }
 
     async function startExperience() {
@@ -504,21 +502,20 @@
                 break;
             case 'transcript':
                 if (data.text) {
-                    appendBubble(transcriptEl, 'user', data.text);
-                    log(`识别文本：${data.text}`);
+                    updateUserTranscript(data.text, Boolean(data.final));
+                    if (data.final) {
+                        log(`识别完成：${data.text}`);
+                    }
                 }
                 break;
             case 'assistant_text':
                 if (data.text) {
-                    appendBubble(replyEl, 'assistant', data.text);
-                    log(`助手回复：${data.text}`);
+                    updateAssistantReply(data.text);
                 }
                 break;
             case 'tts_chunk':
                 if (data.audioBase64) {
-                    pendingTtsPcm.push(decodeBase64ToInt16(data.audioBase64));
-                    pendingTtsSampleRate = Number(data.sampleRate) || pendingTtsSampleRate || targetSampleRate();
-                    pendingTtsChannels = Number(data.channels) || pendingTtsChannels || 1;
+                    queuePlaybackStep(() => schedulePlaybackChunk(data));
                 }
                 break;
             case 'tts_complete':
@@ -526,14 +523,13 @@
                     conversationHistory = data.history;
                 }
                 queuePlaybackStep(async () => {
-                    const sr = Number(data.sampleRate) || pendingTtsSampleRate || targetSampleRate();
-                    const channels = Number(data.channels) || pendingTtsChannels || 1;
-                    const merged = mergePendingTts();
-                    if (merged.length > 0) {
-                        await playInt16Buffer(merged, sr, channels);
+                    const lastEntry = Array.isArray(data.history) ? data.history[data.history.length - 1] : null;
+                    if (lastEntry && lastEntry.role === 'assistant' && lastEntry.content) {
+                        log(`助手回复：${lastEntry.content}`);
                     }
                     awaitingReply = false;
                     recordingActive = true;
+                    currentAssistantBubble = null;
                     lastVoiceTime = performance.now();
                     setStatus('请继续讲话');
                 });
@@ -542,11 +538,9 @@
                 awaitingReply = false;
                 recordingActive = true;
                 lastVoiceTime = performance.now();
+                currentUserBubble = null;
                 setStatus('未识别到语音，请继续讲话');
                 log('ASR 未识别到内容');
-                pendingTtsPcm = [];
-                pendingTtsSampleRate = null;
-                pendingTtsChannels = null;
                 break;
             case 'error':
                 log(`服务端错误：${data.code || ''} ${data.message || ''}`.trim());
@@ -563,6 +557,27 @@
         div.textContent = text;
         container.appendChild(div);
         container.scrollTop = container.scrollHeight;
+        return div;
+    }
+
+    function updateUserTranscript(text, isFinal) {
+        if (!currentUserBubble) {
+            currentUserBubble = appendBubble(transcriptEl, 'user', text);
+        } else {
+            currentUserBubble.textContent = text;
+        }
+        if (isFinal) {
+            currentUserBubble = null;
+        }
+    }
+
+    function updateAssistantReply(delta) {
+        if (!currentAssistantBubble) {
+            currentAssistantBubble = appendBubble(replyEl, 'assistant', delta);
+        } else {
+            currentAssistantBubble.textContent += delta;
+        }
+        replyEl.scrollTop = replyEl.scrollHeight;
     }
 
     function queuePlaybackStep(step) {
@@ -573,21 +588,14 @@
             });
     }
 
-    function mergePendingTts() {
-        if (pendingTtsPcm.length === 0) {
-            return new Int16Array(0);
+    function schedulePlaybackChunk(message) {
+        const sr = Number(message.sampleRate) || targetSampleRate();
+        const channels = Math.max(1, Number(message.channels) || 1);
+        const pcm = decodeBase64ToInt16(message.audioBase64);
+        if (pcm.length === 0) {
+            return Promise.resolve();
         }
-        const total = pendingTtsPcm.reduce((sum, chunk) => sum + chunk.length, 0);
-        const merged = new Int16Array(total);
-        let offset = 0;
-        for (const chunk of pendingTtsPcm) {
-            merged.set(chunk, offset);
-            offset += chunk.length;
-        }
-        pendingTtsPcm = [];
-        pendingTtsSampleRate = null;
-        pendingTtsChannels = null;
-        return merged;
+        return playInt16Buffer(pcm, sr, channels);
     }
 
     async function playInt16Buffer(int16, sampleRate, channels) {

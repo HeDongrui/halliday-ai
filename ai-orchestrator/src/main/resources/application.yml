@@ -17,7 +17,7 @@ ai:
     url: "http://127.0.0.1:8880/v1/audio/speech"
     voice: "af_heart"
     format: "pcm"
-    sampleRate: 16000
+    sampleRate: 24000
     channels: 1
     bitDepth: 16
 management:

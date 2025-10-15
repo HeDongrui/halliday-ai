@@ -48,6 +48,11 @@ public class KokoroTtsProperties {
      */
     private long readTimeoutMs = 300_000;
 
+    /**
+     * WebSocket 流式合成地址，例如 ws://127.0.0.1:8880/v1/ws/tts/stream。
+     */
+    private String wsUrl = "ws://127.0.0.1:8880/v1/ws/tts/stream";
+
     public String getUrl() {
         return url;
     }
@@ -110,5 +115,13 @@ public class KokoroTtsProperties {
 
     public void setReadTimeoutMs(long readTimeoutMs) {
         this.readTimeoutMs = readTimeoutMs;
+    }
+
+    public String getWsUrl() {
+        return wsUrl;
+    }
+
+    public void setWsUrl(String wsUrl) {
+        this.wsUrl = wsUrl;
     }
 }

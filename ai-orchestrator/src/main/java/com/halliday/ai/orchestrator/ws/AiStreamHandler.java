@@ -103,8 +103,7 @@ public class AiStreamHandler extends AbstractWebSocketHandler {
             JsonNode node = objectMapper.readTree(message.getPayload());
             String type = node.path("type").asText();
             if ("eos".equalsIgnoreCase(type) || "vad_end".equalsIgnoreCase(type)) {
-                context.requestFinalization();
-                executor.execute(context::closeInput);
+                context.finalizeInputAsync(executor);
             }
         } catch (IOException ex) {
             log.warn("解析控制消息失败: {}", message.getPayload(), ex);
@@ -314,6 +313,7 @@ public class AiStreamHandler extends AbstractWebSocketHandler {
         private final PipedOutputStream audioOutputStream;
         private final List<LlmMessage> history = new ArrayList<>();
         private final AtomicBoolean finalizationRequested = new AtomicBoolean(false);
+        private final AtomicBoolean inputClosed = new AtomicBoolean(false);
 
         StreamingContext(int bufferSize) throws IOException {
             this.audioInputStream = new PipedInputStream(bufferSize);
@@ -333,6 +333,9 @@ public class AiStreamHandler extends AbstractWebSocketHandler {
         }
 
         void closeInput() {
+            if (!inputClosed.compareAndSet(false, true)) {
+                return;
+            }
             try {
                 audioOutputStream.flush();
                 audioOutputStream.close();
@@ -351,6 +354,16 @@ public class AiStreamHandler extends AbstractWebSocketHandler {
 
         void clearFinalizationRequest() {
             finalizationRequested.set(false);
+        }
+
+        void finalizeInputAsync(ExecutorService executor) {
+            executor.execute(() -> {
+                try {
+                    closeInput();
+                } finally {
+                    requestFinalization();
+                }
+            });
         }
 
         void close() {

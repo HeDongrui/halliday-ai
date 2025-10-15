@@ -34,6 +34,11 @@
             margin: 0 0 1.5rem;
             letter-spacing: 0.02em;
         }
+        h2 {
+            font-size: clamp(1.25rem, 1rem + 1vw, 1.65rem);
+            margin: 0 0 1rem;
+            letter-spacing: 0.01em;
+        }
         p {
             margin: 0 0 1.5rem;
             line-height: 1.75;
@@ -91,6 +96,16 @@
             margin-top: 0.75rem;
             color: rgba(148, 163, 184, 0.8);
         }
+        .section {
+            margin-bottom: 2.5rem;
+            padding-bottom: 2rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .section:last-of-type {
+            border-bottom: none;
+            padding-bottom: 0;
+            margin-bottom: 2rem;
+        }
         .api-info {
             margin-top: 2rem;
             padding-top: 1.5rem;
@@ -99,24 +114,60 @@
         a {
             color: #93c5fd;
         }
+        .audio-player {
+            margin-top: 1.25rem;
+            width: 100%;
+        }
+        .download-link {
+            display: inline-block;
+            margin-top: 0.75rem;
+            padding: 0.6rem 1rem;
+            border-radius: 10px;
+            background: rgba(59, 130, 246, 0.2);
+            color: #cbd5f5;
+            text-decoration: none;
+            transition: background 0.2s ease;
+        }
+        .download-link:hover {
+            background: rgba(59, 130, 246, 0.35);
+        }
     </style>
 </head>
 <body>
 <div class="card">
-    <h1>离线语音转写接口体验</h1>
-    <p>在下方输入 WAV 文件的公网访问地址，点击“发起转写”即可调用 <code>/orchestrator/stt/offline</code> 接口，获取完整的转写文本。</p>
-    <form id="transcribe-form">
-        <label for="wav-url">WAV 文件地址</label>
-        <input id="wav-url" name="wavUrl" type="url" placeholder="https://example.com/audio.wav" required>
-        <button type="submit">发起转写</button>
-    </form>
-    <pre id="result" hidden>等待请求...</pre>
+    <h1>离线语音能力体验</h1>
+    <section class="section">
+        <h2>仅调用 STT 获取文本</h2>
+        <p>在下方输入 WAV 文件的公网访问地址，点击“发起转写”即可调用 <code>/orchestrator/stt/offline</code> 接口，获取完整的转写文本。</p>
+        <form id="transcribe-form">
+            <label for="wav-url">WAV 文件地址</label>
+            <input id="wav-url" name="wavUrl" type="url" placeholder="https://example.com/audio.wav" required>
+            <button type="submit">发起转写</button>
+        </form>
+        <pre id="result" hidden>等待请求...</pre>
+    </section>
+
+    <section class="section">
+        <h2>体验 STT → LLM → TTS 全链路</h2>
+        <p>输入同一段音频地址，即可调用 <code>/orchestrator/pipeline</code>，依次完成语音识别、模型对话与语音合成，返回文本与音频。</p>
+        <form id="pipeline-form">
+            <label for="pipeline-wav-url">WAV 文件地址</label>
+            <input id="pipeline-wav-url" name="wavUrl" type="url" placeholder="https://example.com/audio.wav" required>
+            <button type="submit">发起全链路体验</button>
+        </form>
+        <pre id="pipeline-result" hidden>等待请求...</pre>
+        <audio id="pipeline-audio" class="audio-player" controls hidden></audio>
+        <a id="pipeline-download" class="download-link" hidden download>下载合成音频</a>
+    </section>
+
     <div class="api-info">
         <strong>接口说明</strong>
         <p>
             <code>GET /orchestrator/stt/offline?wavUrl=</code> 接收一个可访问的 WAV 文件地址，返回识别出的文本。<br>
+            <code>GET /orchestrator/pipeline?wavUrl=</code> 完整编排 STT、LLM、TTS，并以 JSON 返回识别文本、模型回复及 Base64 音频数据。<br>
             示例请求：<br>
-            <code>curl -G "${location.origin}/orchestrator/stt/offline" --data-urlencode "wavUrl=https://example.com/audio.wav"</code>
+            <code>curl -G "${location.origin}/orchestrator/stt/offline" --data-urlencode "wavUrl=https://example.com/audio.wav"</code><br>
+            <code>curl -G "${location.origin}/orchestrator/pipeline" --data-urlencode "wavUrl=https://example.com/audio.wav"</code>
         </p>
         <small>如需查看应用运行状况，可访问 <a href="/actuator/health">/actuator/health</a>。</small>
     </div>
@@ -124,6 +175,10 @@
 <script>
     const form = document.getElementById('transcribe-form');
     const result = document.getElementById('result');
+    const pipelineForm = document.getElementById('pipeline-form');
+    const pipelineResult = document.getElementById('pipeline-result');
+    const pipelineAudio = document.getElementById('pipeline-audio');
+    const pipelineDownload = document.getElementById('pipeline-download');
 
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -141,6 +196,45 @@
             result.textContent = text.trim() ? text : '接口返回为空';
         } catch (error) {
             result.textContent = `调用失败：${error.message}`;
+        }
+    });
+
+    pipelineForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const formData = new FormData(pipelineForm);
+        const wavUrl = formData.get('wavUrl');
+        pipelineResult.hidden = false;
+        pipelineResult.textContent = '正在编排 STT → LLM → TTS...';
+        pipelineAudio.hidden = true;
+        pipelineAudio.removeAttribute('src');
+        pipelineAudio.load();
+        pipelineDownload.hidden = true;
+        pipelineDownload.removeAttribute('href');
+
+        try {
+            const response = await fetch(`/orchestrator/pipeline?wavUrl=${encodeURIComponent(wavUrl)}`);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status} ${response.statusText}`);
+            }
+            const data = await response.json();
+            const lines = [];
+            lines.push(`识别文本：${data.transcription && data.transcription.trim() ? data.transcription : '（空）'}`);
+            lines.push(`LLM 回复：${data.reply && data.reply.trim() ? data.reply : '（空）'}`);
+            if (data.audioBase64) {
+                lines.push(`音频格式：${data.audioFormat || '未知'}`);
+                const mime = data.audioMimeType || 'application/octet-stream';
+                const source = `data:${mime};base64,${data.audioBase64}`;
+                pipelineAudio.src = source;
+                pipelineAudio.hidden = false;
+                pipelineAudio.load();
+                pipelineDownload.href = source;
+                const ext = data.audioFormat ? data.audioFormat : 'bin';
+                pipelineDownload.download = `pipeline.${ext}`;
+                pipelineDownload.hidden = false;
+            }
+            pipelineResult.textContent = lines.join('\n');
+        } catch (error) {
+            pipelineResult.textContent = `调用失败：${error.message}`;
         }
     });
 </script>

@@ -29,8 +29,10 @@ public class StartupInfoLogger implements ApplicationListener<ApplicationReadyEv
         int port = webContext.getWebServer().getPort();
         String baseUrl = "http://localhost:" + port;
         String pageUrl = baseUrl + "/index.html";
-        String apiUrl = baseUrl + "/orchestrator/stt/offline?wavUrl={wavUrl}";
+        String sttApiUrl = baseUrl + "/orchestrator/stt/offline?wavUrl={wavUrl}";
+        String pipelineApiUrl = baseUrl + "/orchestrator/pipeline?wavUrl={wavUrl}";
         log.info("离线转写体验页地址: {}", pageUrl);
-        log.info("离线转写接口地址: {}", apiUrl);
+        log.info("离线转写接口地址: {}", sttApiUrl);
+        log.info("全链路体验接口地址: {}", pipelineApiUrl);
     }
 }

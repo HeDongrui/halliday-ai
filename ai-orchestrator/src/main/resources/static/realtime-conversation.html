@@ -544,6 +544,9 @@
                 lastVoiceTime = performance.now();
                 setStatus('未识别到语音，请继续讲话');
                 log('ASR 未识别到内容');
+                pendingTtsPcm = [];
+                pendingTtsSampleRate = null;
+                pendingTtsChannels = null;
                 break;
             case 'error':
                 log(`服务端错误：${data.code || ''} ${data.message || ''}`.trim());

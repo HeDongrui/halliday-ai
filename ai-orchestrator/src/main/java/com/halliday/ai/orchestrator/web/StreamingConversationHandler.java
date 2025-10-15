@@ -230,6 +230,8 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         }
         ObjectNode complete = event("tts_complete");
         complete.set("history", toHistoryArray(state.getHistory()));
+        complete.put("sampleRate", format.sampleRate());
+        complete.put("channels", format.channels());
         sendEvent(session, complete);
     }
 

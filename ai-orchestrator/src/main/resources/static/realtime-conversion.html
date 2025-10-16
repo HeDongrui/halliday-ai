@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>普通实时语音对话体验</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            font-family: "Segoe UI", "Helvetica Neue", Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", sans-serif;
+            background-color: #030712;
+            color: #e6edf3;
+        }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            padding: 2.5rem 1.25rem 3rem;
+            display: flex;
+            justify-content: center;
+        }
+        .card {
+            width: min(960px, 100%);
+            background: rgba(13, 17, 23, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 18px;
+            padding: 2.75rem 2.5rem;
+            box-shadow: 0 24px 48px rgba(15, 23, 42, 0.55);
+            backdrop-filter: blur(16px);
+        }
+        h1 {
+            font-size: clamp(1.85rem, 1.2rem + 1.8vw, 2.8rem);
+            margin: 0 0 1.75rem;
+        }
+        p {
+            margin: 0 0 1.5rem;
+            line-height: 1.7;
+            color: rgba(226, 232, 240, 0.8);
+        }
+        .nav-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            margin-bottom: 1.5rem;
+            color: rgba(148, 163, 184, 0.85);
+            text-decoration: none;
+        }
+        .nav-link::before {
+            content: "←";
+        }
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: center;
+            margin-bottom: 1.75rem;
+        }
+        label.inline {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            font-weight: 600;
+        }
+        input[type="number"] {
+            width: 160px;
+            padding: 0.55rem 0.75rem;
+            border-radius: 10px;
+            border: 1px solid rgba(148, 163, 184, 0.4);
+            background: rgba(2, 6, 23, 0.6);
+            color: inherit;
+            font-size: 0.95rem;
+        }
+        button.primary {
+            padding: 0.85rem 1.8rem;
+            border-radius: 999px;
+            border: none;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            background: linear-gradient(135deg, #34d399, #22d3ee);
+            color: #02131f;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        button.primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 12px 28px rgba(45, 212, 191, 0.32);
+        }
+        button.primary:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        button.danger {
+            padding: 0.85rem 1.8rem;
+            border-radius: 999px;
+            border: 1px solid rgba(248, 113, 113, 0.65);
+            font-weight: 600;
+            background: transparent;
+            color: #fca5a5;
+            cursor: pointer;
+            transition: background 0.2s ease, color 0.2s ease;
+        }
+        button.danger:hover {
+            background: rgba(248, 113, 113, 0.12);
+            color: #fecaca;
+        }
+        button.danger:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 0.75rem 1rem;
+            border-radius: 12px;
+            background: rgba(30, 64, 175, 0.18);
+            border: 1px solid rgba(96, 165, 250, 0.25);
+            font-size: 0.95rem;
+            color: rgba(191, 219, 254, 0.9);
+        }
+        .panels {
+            display: grid;
+            gap: 1.5rem;
+        }
+        .panel {
+            padding: 1.5rem;
+            border-radius: 14px;
+            background: rgba(2, 6, 23, 0.7);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+        }
+        .panel h2 {
+            margin: 0 0 1rem;
+            font-size: 1.15rem;
+        }
+        .transcript, .reply {
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+        }
+        .bubble {
+            padding: 0.75rem 1rem;
+            border-radius: 12px;
+            background: rgba(15, 23, 42, 0.55);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            line-height: 1.6;
+        }
+        .bubble.user {
+            border-color: rgba(59, 130, 246, 0.45);
+            background: rgba(37, 99, 235, 0.12);
+        }
+        .bubble.assistant {
+            border-color: rgba(16, 185, 129, 0.45);
+            background: rgba(16, 185, 129, 0.12);
+        }
+        .log {
+            max-height: 180px;
+            overflow-y: auto;
+            font-family: "Fira Code", "SFMono-Regular", "Menlo", monospace;
+            font-size: 0.85rem;
+            line-height: 1.55;
+            white-space: pre-wrap;
+            color: rgba(203, 213, 225, 0.85);
+        }
+        .hint {
+            margin-top: 1rem;
+            font-size: 0.85rem;
+            color: rgba(148, 163, 184, 0.75);
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <a class="nav-link" href="index.html">返回首页</a>
+    <h1>实时语音对话</h1>
+    <p>点击“开始体验”后，浏览器会请求麦克风权限并捕获 PCM16LE 音频。检测到一次语音段落并静默 2 秒后，页面会将音频通过 REST 接口 <code>/api/conversation</code> 上传，服务端完成 ASR → LLM → TTS，并返回文本与语音回复。播放结束后即可进入下一轮对话。</p>
+    <div class="controls">
+        <label class="inline">STT 目标采样率
+            <input id="stt-rate" type="number" value="16000" min="8000" max="48000" step="1000">
+        </label>
+        <button id="start" class="primary">开始体验</button>
+        <button id="stop" class="danger" disabled>结束体验</button>
+        <div id="status" class="status">未连接</div>
+    </div>
+    <div class="panels">
+        <section class="panel">
+            <h2>识别文本</h2>
+            <div id="transcript" class="transcript"></div>
+        </section>
+        <section class="panel">
+            <h2>LLM 回复</h2>
+            <div id="reply" class="reply"></div>
+            <p class="hint">若无音频回复，可检查 Kokoro TTS 服务是否正常。手动点击“结束体验”可立即停止采集。</p>
+        </section>
+        <section class="panel">
+            <h2>调试日志</h2>
+            <div id="log" class="log"></div>
+        </section>
+    </div>
+</div>
+<script>
+    const startBtn = document.getElementById('start');
+    const stopBtn = document.getElementById('stop');
+    const statusEl = document.getElementById('status');
+    const transcriptEl = document.getElementById('transcript');
+    const replyEl = document.getElementById('reply');
+    const logEl = document.getElementById('log');
+    const sttRateInput = document.getElementById('stt-rate');
+
+    const vadSilenceMs = 2000;
+    const vadThreshold = 0.015;
+
+    let mediaStream = null;
+    let captureContext = null;
+    let processor = null;
+    let playbackContext = null;
+    let playbackTime = 0;
+
+    let resampleBuffer = [];
+    let recordedChunks = [];
+    let sampleRateRatio = 1;
+    let recordingActive = false;
+    let awaitingReply = false;
+    let lastVoiceTime = 0;
+    let conversationHistory = [];
+
+    function log(message) {
+        const time = new Date().toLocaleTimeString();
+        logEl.textContent += `[${time}] ${message}\n`;
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setStatus(text) {
+        statusEl.textContent = text;
+    }
+
+    function resetUi() {
+        transcriptEl.innerHTML = '';
+        replyEl.innerHTML = '';
+        logEl.textContent = '';
+        conversationHistory = [];
+        playbackTime = 0;
+    }
+
+    startBtn.addEventListener('click', startExperience);
+    stopBtn.addEventListener('click', stopExperience);
+
+    async function startExperience() {
+        if (recordingActive || awaitingReply) {
+            return;
+        }
+        resetUi();
+        resampleBuffer = [];
+        recordedChunks = [];
+        startBtn.disabled = true;
+        sttRateInput.disabled = true;
+        stopBtn.disabled = false;
+        setStatus('初始化麦克风...');
+        try {
+            await setupMicrophone();
+            recordingActive = true;
+            lastVoiceTime = performance.now();
+            setStatus('请开始讲话');
+            log('麦克风初始化完成，等待语音输入');
+        } catch (error) {
+            log(`初始化失败：${error.message}`);
+            setStatus('初始化失败');
+            await stopExperience();
+        }
+    }
+
+    async function stopExperience() {
+        recordingActive = false;
+        awaitingReply = false;
+        resampleBuffer = [];
+        recordedChunks = [];
+        startBtn.disabled = false;
+        sttRateInput.disabled = false;
+        stopBtn.disabled = true;
+        if (processor) {
+            try { processor.disconnect(); } catch (_) {}
+            processor.onaudioprocess = null;
+            processor = null;
+        }
+        if (captureContext) {
+            try { captureContext.close(); } catch (_) {}
+            captureContext = null;
+        }
+        if (mediaStream) {
+            mediaStream.getTracks().forEach(track => track.stop());
+            mediaStream = null;
+        }
+        if (playbackContext) {
+            try { playbackContext.close(); } catch (_) {}
+            playbackContext = null;
+        }
+        playbackTime = 0;
+        setStatus('未连接');
+        log('对话已结束');
+    }
+
+    async function setupMicrophone() {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        });
+        captureContext = new (window.AudioContext || window.webkitAudioContext)();
+        await captureContext.resume();
+        const source = captureContext.createMediaStreamSource(mediaStream);
+        processor = captureContext.createScriptProcessor(4096, 1, 1);
+        sampleRateRatio = captureContext.sampleRate / targetSampleRate();
+        resampleBuffer = [];
+        recordedChunks = [];
+
+        processor.onaudioprocess = (event) => {
+            if (!recordingActive) {
+                return;
+            }
+            const input = event.inputBuffer.getChannelData(0);
+            collectSamples(input);
+        };
+
+        const silentGain = captureContext.createGain();
+        silentGain.gain.value = 0;
+        source.connect(processor);
+        processor.connect(silentGain);
+        silentGain.connect(captureContext.destination);
+        log(`麦克风已打开（设备采样率 ${Math.round(captureContext.sampleRate)}Hz）`);
+    }
+
+    function targetSampleRate() {
+        const value = Number(sttRateInput.value);
+        return Number.isFinite(value) && value > 0 ? value : 16000;
+    }
+
+    function collectSamples(chunk) {
+        resampleBuffer.push(...chunk);
+        if (!Number.isFinite(sampleRateRatio) || sampleRateRatio <= 0) {
+            sampleRateRatio = 1;
+        }
+        const available = Math.floor(resampleBuffer.length / sampleRateRatio);
+        if (available === 0) {
+            return;
+        }
+        const output = new Int16Array(available);
+        let energy = 0;
+        for (let i = 0; i < available; i++) {
+            const position = i * sampleRateRatio;
+            const left = Math.floor(position);
+            const right = Math.min(left + 1, resampleBuffer.length - 1);
+            const frac = position - left;
+            const sample = resampleBuffer[left] + (resampleBuffer[right] - resampleBuffer[left]) * frac;
+            const clipped = Math.max(-1, Math.min(1, sample));
+            const intSample = Math.round(clipped * 0x7fff);
+            output[i] = intSample;
+            const normalized = intSample / 0x7fff;
+            energy += normalized * normalized;
+        }
+        const consumed = Math.floor(available * sampleRateRatio);
+        resampleBuffer = resampleBuffer.slice(consumed);
+        recordedChunks.push(output);
+        const meanSquare = energy / output.length;
+        handleVad(meanSquare);
+    }
+
+    function handleVad(meanSquare) {
+        if (!recordingActive) {
+            return;
+        }
+        if (meanSquare > vadThreshold * vadThreshold) {
+            lastVoiceTime = performance.now();
+            setStatus('检测到语音输入');
+        } else {
+            const elapsed = performance.now() - lastVoiceTime;
+            if (elapsed > vadSilenceMs && recordedChunks.length > 0) {
+                finalizeSegment();
+            }
+        }
+    }
+
+    function finalizeSegment() {
+        if (awaitingReply || recordedChunks.length === 0) {
+            return;
+        }
+        const pcm = mergeChunks(recordedChunks);
+        if (pcm.length === 0) {
+            recordedChunks = [];
+            return;
+        }
+        awaitingReply = true;
+        recordingActive = false;
+        recordedChunks = [];
+        resampleBuffer = [];
+        setStatus('等待模型回复...');
+        log('检测到语音段落结束，准备上传');
+        uploadConversation(pcm).catch(error => {
+            log(`调用失败：${error.message}`);
+            setStatus('调用失败，请重试');
+            awaitingReply = false;
+            recordingActive = true;
+            lastVoiceTime = performance.now();
+        });
+    }
+
+    function mergeChunks(chunks) {
+        const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+        const merged = new Int16Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+            merged.set(chunk, offset);
+            offset += chunk.length;
+        }
+        return merged;
+    }
+
+    async function uploadConversation(pcm) {
+        const base64 = encodePcm16ToBase64(pcm);
+        log(`上传音频，长度 ${(pcm.length / targetSampleRate()).toFixed(2)} 秒`);
+        const payload = {
+            audioBase64: base64,
+            sampleRate: targetSampleRate(),
+            channels: 1,
+            bitDepth: 16,
+            history: conversationHistory
+        };
+        const response = await fetch('/api/conversation', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (response.status === 204) {
+            log('未识别到有效语音内容，继续监听下一次发言');
+            awaitingReply = false;
+            recordingActive = true;
+            lastVoiceTime = performance.now();
+            setStatus('请继续讲话');
+            return;
+        }
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        const result = await response.json();
+        await handleConversationResult(result);
+    }
+
+    async function handleConversationResult(result) {
+        if (result.userText) {
+            appendBubble(transcriptEl, 'user', result.userText);
+            log(`识别文本：${result.userText}`);
+        }
+        if (result.assistantText) {
+            appendBubble(replyEl, 'assistant', result.assistantText);
+            log(`助手回复：${result.assistantText}`);
+        }
+        if (Array.isArray(result.history)) {
+            conversationHistory = result.history;
+        }
+        await playAssistantAudio(result.assistantAudioBase64, result.sampleRate, result.channels);
+        awaitingReply = false;
+        recordingActive = true;
+        lastVoiceTime = performance.now();
+        setStatus('请继续讲话');
+    }
+
+    function appendBubble(container, role, text) {
+        const div = document.createElement('div');
+        div.className = `bubble ${role}`;
+        div.textContent = text;
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    async function playAssistantAudio(base64, sampleRate, channels) {
+        if (!base64 || base64.length === 0) {
+            log('无音频回复，跳过播放');
+            return;
+        }
+        const int16 = decodeBase64ToInt16(base64);
+        const sr = Number(sampleRate) || targetSampleRate();
+        if (!playbackContext) {
+            playbackContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (playbackContext.state === 'suspended') {
+            await playbackContext.resume();
+        }
+        const context = playbackContext;
+        const frameCount = int16.length / Math.max(1, channels || 1);
+        const buffer = context.createBuffer(1, frameCount, sr);
+        const output = buffer.getChannelData(0);
+        for (let i = 0; i < frameCount; i++) {
+            output[i] = int16[i] / 0x7fff;
+        }
+        return new Promise((resolve) => {
+            const source = context.createBufferSource();
+            source.buffer = buffer;
+            source.connect(context.destination);
+            const startAt = Math.max(context.currentTime, playbackTime);
+            source.start(startAt);
+            playbackTime = startAt + buffer.duration;
+            source.addEventListener('ended', resolve, { once: true });
+        });
+    }
+
+    function encodePcm16ToBase64(int16) {
+        const uint8 = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
+        let binary = '';
+        const chunkSize = 0x8000;
+        for (let i = 0; i < uint8.length; i += chunkSize) {
+            const chunk = uint8.subarray(i, i + chunkSize);
+            binary += String.fromCharCode(...chunk);
+        }
+        return btoa(binary);
+    }
+
+    function decodeBase64ToInt16(base64) {
+        const binary = atob(base64);
+        const len = binary.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return new Int16Array(bytes.buffer);
+    }
+</script>
+</body>
+</html>

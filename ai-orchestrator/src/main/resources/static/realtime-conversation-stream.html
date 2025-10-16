@@ -69,6 +69,15 @@
             color: inherit;
             font-size: 0.95rem;
         }
+        select {
+            width: 180px;
+            padding: 0.55rem 0.75rem;
+            border-radius: 10px;
+            border: 1px solid rgba(148, 163, 184, 0.4);
+            background: rgba(2, 6, 23, 0.6);
+            color: inherit;
+            font-size: 0.95rem;
+        }
         button.primary {
             padding: 0.85rem 1.8rem;
             border-radius: 999px;
@@ -174,6 +183,12 @@
         <label class="inline">STT 目标采样率
             <input id="stt-rate" type="number" value="16000" min="8000" max="48000" step="1000">
         </label>
+        <label class="inline">STT 服务提供商
+            <select id="stt-provider">
+                <option value="sherpa">Sherpa</option>
+                <option value="azure">Azure</option>
+            </select>
+        </label>
         <button id="start" class="primary">开始体验</button>
         <button id="stop" class="danger" disabled>结束体验</button>
         <div id="status" class="status">未连接</div>
@@ -202,6 +217,13 @@
     const replyEl = document.getElementById('reply');
     const logEl = document.getElementById('log');
     const sttRateInput = document.getElementById('stt-rate');
+    const sttProviderSelect = document.getElementById('stt-provider');
+    let preferredSttProvider = (sttProviderSelect.value || '').toLowerCase();
+
+    const sttProviderLabels = {
+        sherpa: 'Sherpa',
+        azure: 'Azure'
+    };
 
     const vadSilenceMs = 2000;
     const vadThreshold = 0.015;
@@ -223,6 +245,7 @@
     let hasSentAudio = false;
 
     let conversationHistory = [];
+    let availableSttProviders = new Set();
 
     let socket = null;
     let socketReady = false;
@@ -238,8 +261,65 @@
         logEl.scrollTop = logEl.scrollHeight;
     }
 
+    sttProviderSelect.addEventListener('change', () => {
+        preferredSttProvider = (sttProviderSelect.value || '').toLowerCase();
+    });
+
     function setStatus(text) {
         statusEl.textContent = text;
+    }
+
+    function updateSttProviderOptions(providers, defaultProvider) {
+        const normalizedList = Array.isArray(providers)
+            ? providers.map(value => String(value).toLowerCase())
+            : [];
+        const normalizedDefault = typeof defaultProvider === 'string' ? defaultProvider.toLowerCase() : '';
+        const currentValue = (sttProviderSelect.value || '').toLowerCase();
+        availableSttProviders = new Set(normalizedList);
+
+        const enableAll = availableSttProviders.size === 0;
+        Array.from(sttProviderSelect.options).forEach(option => {
+            const value = option.value.toLowerCase();
+            option.disabled = !enableAll && !availableSttProviders.has(value);
+        });
+
+        const candidates = [];
+        if (preferredSttProvider) {
+            candidates.push(preferredSttProvider);
+        }
+        if (currentValue && !candidates.includes(currentValue)) {
+            candidates.push(currentValue);
+        }
+        if (normalizedDefault && !candidates.includes(normalizedDefault)) {
+            candidates.push(normalizedDefault);
+        }
+        const firstOption = Array.from(sttProviderSelect.options)
+            .map(option => option.value.toLowerCase())
+            .find(value => enableAll || availableSttProviders.has(value));
+        if (firstOption && !candidates.includes(firstOption)) {
+            candidates.push(firstOption);
+        }
+        if (!enableAll) {
+            const firstAvailable = availableSttProviders.values().next();
+            if (!firstAvailable.done && !candidates.includes(firstAvailable.value)) {
+                candidates.push(firstAvailable.value);
+            }
+        }
+
+        const nextValue = candidates.find(value => enableAll || availableSttProviders.has(value)) || '';
+        if (nextValue) {
+            preferredSttProvider = nextValue;
+            if (sttProviderSelect.value.toLowerCase() !== nextValue) {
+                sttProviderSelect.value = nextValue;
+            }
+        } else if (!preferredSttProvider && sttProviderSelect.value) {
+            preferredSttProvider = sttProviderSelect.value.toLowerCase();
+        }
+
+        const finalProviders = enableAll
+            ? Array.from(new Set(Array.from(sttProviderSelect.options).map(option => option.value.toLowerCase())))
+            : Array.from(availableSttProviders);
+        return finalProviders;
     }
 
     function resetUi() {
@@ -263,6 +343,8 @@
         hasSentAudio = false;
         startBtn.disabled = true;
         sttRateInput.disabled = true;
+        sttProviderSelect.disabled = true;
+        preferredSttProvider = (sttProviderSelect.value || '').toLowerCase();
         stopBtn.disabled = false;
         setStatus('连接服务中...');
         try {
@@ -288,6 +370,7 @@
         hasSentAudio = false;
         startBtn.disabled = false;
         sttRateInput.disabled = false;
+        sttProviderSelect.disabled = false;
         stopBtn.disabled = true;
         if (processor) {
             try { processor.disconnect(); } catch (_) {}
@@ -315,6 +398,7 @@
         }
         playbackTime = 0;
         playbackQueue = Promise.resolve();
+        preferredSttProvider = (sttProviderSelect.value || '').toLowerCase();
         setStatus('未连接');
         log('对话已结束');
     }
@@ -370,8 +454,15 @@
             bitDepth: 16,
             history: conversationHistory
         };
+        const providerValue = preferredSttProvider;
+        if (providerValue) {
+            payload.sttProvider = providerValue;
+        }
         socket.send(JSON.stringify(payload));
-        log('已发送 start 消息');
+        const providerLabel = payload.sttProvider
+            ? (sttProviderLabels[payload.sttProvider] || payload.sttProvider)
+            : '默认';
+        log(`已发送 start 消息（STT=${providerLabel}）`);
     }
 
     async function setupMicrophone() {
@@ -486,7 +577,23 @@
             return;
         }
         switch (data.type) {
-            case 'ready':
+            case 'ready': {
+                const providersList = updateSttProviderOptions(data.sttProviders, data.defaultSttProvider);
+                if (providersList.length > 0) {
+                    const readableProviders = providersList
+                        .map(value => sttProviderLabels[value] || value)
+                        .join(', ');
+                    if (readableProviders) {
+                        log(`可用 STT 服务：${readableProviders}`);
+                    }
+                }
+                if (!preferredSttProvider && typeof data.defaultSttProvider === 'string') {
+                    const normalizedDefault = data.defaultSttProvider.toLowerCase();
+                    if (providersList.includes(normalizedDefault)) {
+                        preferredSttProvider = normalizedDefault;
+                        sttProviderSelect.value = normalizedDefault;
+                    }
+                }
                 socketReady = true;
                 log('服务端会话已就绪');
                 setStatus('服务已连接');
@@ -496,7 +603,19 @@
                 pendingReadyResolve = null;
                 pendingReadyReject = null;
                 break;
+            }
             case 'listening':
+                if (data.sttProvider) {
+                    const key = String(data.sttProvider).toLowerCase();
+                    const providerName = sttProviderLabels[key] || data.sttProvider;
+                    log(`使用 STT 服务：${providerName}`);
+                    const hasOption = Array.from(sttProviderSelect.options)
+                        .some(option => option.value.toLowerCase() === key);
+                    if (hasOption && sttProviderSelect.value.toLowerCase() !== key) {
+                        sttProviderSelect.value = key;
+                    }
+                    preferredSttProvider = key;
+                }
                 log('服务端准备接收音频');
                 setStatus('请开始讲话');
                 break;
@@ -561,7 +680,7 @@
                 }
                 break;
             case 'error':
-                log(`服务端错误：${data.code || ''} ${data.message || ''}`.trim());
+                handleServerError(data);
                 break;
             default:
                 log(`收到未知类型消息：${data.type}`);
@@ -596,6 +715,21 @@
             currentAssistantBubble.textContent += delta;
         }
         replyEl.scrollTop = replyEl.scrollHeight;
+    }
+
+    function handleServerError(data) {
+        const codePart = data && typeof data.code === 'string' && data.code.length > 0 ? `[${data.code}] ` : '';
+        const message = data && data.message ? data.message : '未知错误';
+        log(`服务端错误：${codePart}${message}`.trim());
+        setStatus('服务端错误');
+        if (recordingActive || awaitingReply) {
+            stopExperience().catch(() => {});
+        } else {
+            startBtn.disabled = false;
+            sttRateInput.disabled = false;
+            sttProviderSelect.disabled = false;
+            stopBtn.disabled = true;
+        }
     }
 
     function queuePlaybackStep(step) {

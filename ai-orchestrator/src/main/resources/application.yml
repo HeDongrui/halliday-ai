@@ -5,6 +5,15 @@ ai:
     wsUrl: "ws://127.0.0.1:8000/asr?samplerate=16000"
     frameBytes: 640
     resultTimeoutMs: 5000
+    azure:
+      enabled: true
+      subscriptionKey: "${AZURE_STT_KEY:}"
+      region: "${AZURE_STT_ENDPOINT:}"
+      language: "en-US"
+      sampleRate: 16000
+      channels: 1
+      bitDepth: 16
+      operationTimeoutMs: 10000
   llm:
     baseUrl: "http://127.0.0.1:3000/v1/chat/completions"
     model: "llama3.1"

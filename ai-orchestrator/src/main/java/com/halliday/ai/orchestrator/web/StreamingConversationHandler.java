@@ -29,7 +29,10 @@ import java.io.PipedOutputStream;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -46,7 +49,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
     private static final String SENTENCE_BOUNDARY = "。！？.!?";
 
     private final ObjectMapper mapper;
-    private final StreamingSpeechToTextClient sttClient;
+    private final Map<String, StreamingSpeechToTextClient> sttClients;
+    private final List<String> availableSttProviders;
+    private final String defaultSttProvider;
     private final StreamingLanguageModelClient llmClient;
     private final StreamingTextToSpeechClient streamingTtsClient;
     private final TextToSpeechClient blockingTtsClient;
@@ -55,13 +60,27 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
     private final Map<String, SessionContext> sessions = new ConcurrentHashMap<>();
 
     public StreamingConversationHandler(ObjectMapper mapper,
-                                        StreamingSpeechToTextClient sttClient,
+                                        Map<String, StreamingSpeechToTextClient> sttClients,
                                         StreamingLanguageModelClient llmClient,
                                         StreamingTextToSpeechClient streamingTtsClient,
                                         TextToSpeechClient blockingTtsClient,
                                         KokoroTtsProperties ttsProperties) {
         this.mapper = Objects.requireNonNull(mapper, "mapper");
-        this.sttClient = Objects.requireNonNull(sttClient, "sttClient");
+        Objects.requireNonNull(sttClients, "sttClients");
+        Map<String, StreamingSpeechToTextClient> clientMap = new LinkedHashMap<>();
+        sttClients.forEach((name, client) -> {
+            String key = normalizeProviderKey(name);
+            if (!StringUtils.hasText(key) || clientMap.containsKey(key)) {
+                return;
+            }
+            clientMap.put(key, client);
+        });
+        if (clientMap.isEmpty()) {
+            throw new IllegalStateException("No streaming STT clients configured");
+        }
+        this.sttClients = Collections.unmodifiableMap(clientMap);
+        this.availableSttProviders = List.copyOf(this.sttClients.keySet());
+        this.defaultSttProvider = determineDefaultProvider(this.sttClients);
         this.llmClient = Objects.requireNonNull(llmClient, "llmClient");
         this.streamingTtsClient = Objects.requireNonNull(streamingTtsClient, "streamingTtsClient");
         this.blockingTtsClient = Objects.requireNonNull(blockingTtsClient, "blockingTtsClient");
@@ -77,8 +96,15 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        sessions.put(session.getId(), new SessionContext());
-        sendJson(session, event("ready"));
+        SessionContext context = new SessionContext(defaultSttProvider);
+        sessions.put(session.getId(), context);
+        ObjectNode ready = event("ready");
+        ArrayNode providers = ready.putArray("sttProviders");
+        availableSttProviders.forEach(providers::add);
+        if (StringUtils.hasText(defaultSttProvider)) {
+            ready.put("defaultSttProvider", defaultSttProvider);
+        }
+        sendJson(session, ready);
         log.debug("WebSocket session {} established", session.getId());
     }
 
@@ -117,9 +143,26 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         ctx.resetTurn();
         ctx.inputFormat = parseAudioFormat(node);
         node.path("history").forEach(item -> parseConversationMessage(item).ifPresent(ctx.history::add));
+        String requestedProvider = node.path("sttProvider").asText("");
+        String provider = resolveSttProvider(requestedProvider);
+        if (provider == null) {
+            ObjectNode extra = mapper.createObjectNode();
+            extra.put("requestedProvider", requestedProvider);
+            ArrayNode available = extra.putArray("availableProviders");
+            availableSttProviders.forEach(available::add);
+            long now = System.currentTimeMillis();
+            sendDebug(session, "asr", "error", "Unsupported STT provider requested", now, now, extra);
+            sendJson(session, error("STT_PROVIDER_UNAVAILABLE", "不支持的语音识别服务: " + requestedProvider));
+            ctx.turnActive.set(false);
+            ctx.capturing.set(false);
+            return;
+        }
+        ctx.sttProvider = provider;
         ctx.turnActive.set(true);
         ctx.capturing.set(true);
-        sendJson(session, event("listening"));
+        ObjectNode listening = event("listening");
+        listening.put("sttProvider", ctx.sttProvider);
+        sendJson(session, listening);
         startStreamingStt(session, ctx);
     }
 
@@ -165,12 +208,27 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
     }
 
     private void startStreamingStt(WebSocketSession session, SessionContext ctx) throws IOException {
+        StreamingSpeechToTextClient sttClient = sttClients.get(ctx.sttProvider);
+        if (sttClient == null) {
+            long now = System.currentTimeMillis();
+            ObjectNode extra = mapper.createObjectNode();
+            extra.put("provider", ctx.sttProvider == null ? "" : ctx.sttProvider);
+            ArrayNode available = extra.putArray("availableProviders");
+            availableSttProviders.forEach(available::add);
+            sendDebug(session, "asr", "error", "Requested STT provider is not configured", now, now, extra);
+            sendSafely(session, error("STT_PROVIDER_UNAVAILABLE", "语音识别服务不可用: " + ctx.sttProvider));
+            ctx.capturing.set(false);
+            ctx.turnActive.set(false);
+            ctx.processing.set(false);
+            return;
+        }
         ctx.initAudioPipe();
         ctx.asrStartMs = System.currentTimeMillis();
         ObjectNode extra = mapper.createObjectNode();
         extra.put("sampleRate", ctx.inputFormat.sampleRate());
         extra.put("channels", ctx.inputFormat.channels());
         extra.put("bitDepth", ctx.inputFormat.bitDepth());
+        extra.put("provider", ctx.sttProvider);
         sendDebug(session, "asr", "start", "ASR streaming started", ctx.asrStartMs, null, extra);
         executor.execute(() -> {
             try {
@@ -180,6 +238,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                 long end = System.currentTimeMillis();
                 ObjectNode errorExtra = mapper.createObjectNode();
                 errorExtra.put("message", ex.getMessage());
+                errorExtra.put("provider", ctx.sttProvider);
                 sendDebug(session, "asr", "error", "Streaming STT failed", ctx.asrStartMs, end, errorExtra);
                 sendSafely(session, error("STT_ERROR", ex.getMessage()));
                 ctx.turnActive.set(false);
@@ -201,6 +260,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             ObjectNode extra = mapper.createObjectNode();
             extra.put("final", true);
             extra.put("length", text.length());
+            extra.put("provider", ctx.sttProvider);
             if (StringUtils.hasText(text)) {
                 extra.put("text", text);
             }
@@ -483,6 +543,35 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         return -1;
     }
 
+    private String resolveSttProvider(String requestedProvider) {
+        String normalized = normalizeProviderKey(requestedProvider);
+        if (StringUtils.hasText(normalized)) {
+            return sttClients.containsKey(normalized) ? normalized : null;
+        }
+        return defaultSttProvider;
+    }
+
+    private String determineDefaultProvider(Map<String, StreamingSpeechToTextClient> clients) {
+        if (clients.containsKey("sherpa")) {
+            return "sherpa";
+        }
+        return clients.keySet().iterator().next();
+    }
+
+    private String normalizeProviderKey(String name) {
+        if (!StringUtils.hasText(name)) {
+            return "";
+        }
+        String lower = name.trim().toLowerCase(Locale.ROOT);
+        if (lower.contains("azure")) {
+            return "azure";
+        }
+        if (lower.contains("sherpa")) {
+            return "sherpa";
+        }
+        return lower;
+    }
+
     private AudioFormat parseAudioFormat(JsonNode node) {
         int sampleRate = node.path("sampleRate").asInt(AudioFormat.PCM16_MONO_16K.sampleRate());
         int channels = node.path("channels").asInt(AudioFormat.PCM16_MONO_16K.channels());
@@ -535,6 +624,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         final AtomicBoolean capturing = new AtomicBoolean(false);
         final AtomicBoolean turnActive = new AtomicBoolean(false);
         final AtomicBoolean processing = new AtomicBoolean(false);
+        String sttProvider;
         PipedInputStream audioInput;
         PipedOutputStream audioOutput;
         final StringBuilder transcriptBuffer = new StringBuilder();
@@ -543,6 +633,10 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         long llmStartMs;
         long ttsStartMs;
         final AtomicInteger ttsIndex = new AtomicInteger();
+
+        SessionContext(String defaultProvider) {
+            this.sttProvider = defaultProvider;
+        }
 
         void resetTurn() {
             transcriptBuffer.setLength(0);

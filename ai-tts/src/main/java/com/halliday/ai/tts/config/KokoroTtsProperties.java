@@ -51,7 +51,7 @@ public class KokoroTtsProperties {
     /**
      * WebSocket 流式合成地址，例如 ws://127.0.0.1:8880/v1/ws/tts/stream。
      */
-    private String wsUrl = "ws://127.0.0.1:8880/v1/ws/tts/stream";
+    private String wsUrl;
 
     public String getUrl() {
         return url;

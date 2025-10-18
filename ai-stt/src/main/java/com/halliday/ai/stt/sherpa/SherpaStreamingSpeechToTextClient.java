@@ -2,6 +2,7 @@ package com.halliday.ai.stt.sherpa;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.halliday.ai.common.spi.NamedService;
 import com.halliday.ai.common.stt.SttResult;
 import com.halliday.ai.stt.config.SherpaSttProperties;
 import com.halliday.ai.stt.core.StreamingSpeechToTextClient;
@@ -21,7 +22,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
-public class SherpaStreamingSpeechToTextClient implements StreamingSpeechToTextClient {
+public class SherpaStreamingSpeechToTextClient implements StreamingSpeechToTextClient, NamedService {
 
     private final SherpaSttProperties properties;
     private final ObjectMapper mapper;
@@ -45,6 +46,11 @@ public class SherpaStreamingSpeechToTextClient implements StreamingSpeechToTextC
     }
 
     private static final AtomicInteger THREAD_COUNTER = new AtomicInteger(0);
+
+    @Override
+    public String id() {
+        return "sherpa";
+    }
 
     @Override
     public void streamRecognize(InputStream pcmStream, Consumer<SttResult> onResult) {

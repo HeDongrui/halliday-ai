@@ -2,7 +2,7 @@ server:
   port: 9099
 ai:
   stt:
-    wsUrl: "ws://127.0.0.1:8000/asr?samplerate=16000"
+    wsUrl: "ws://47.84.180.15:8000/asr?samplerate=16000"
     frameBytes: 640
     resultTimeoutMs: 5000
     azure:
@@ -15,23 +15,22 @@ ai:
       bitDepth: 16
       operationTimeoutMs: 10000
   llm:
-    baseUrl: "http://127.0.0.1:3000/v1/chat/completions"
-    model: "llama3.1"
-#    apiKey: "${AI_LLM_API_KEY:}"
-    apiKey: "sk-MClhnrkTq8EyLdyk0y8ilytW4yx8yOj5oMNSvx03ckCfwMk7"
+    baseUrl: "http://47.84.180.15:3000/v1/chat/completions"
+    model: "qwen3-32b"
+    apiKey: "sk-ZdGyB87Wdj7FelxPuUGGjD7mDRhuDtIeNZKvxUyv3HNgKQ8c"
     temperature: 0.7
     topP: 1.0
     systemPrompt: "You are an English AI assistant. Always respond in English with concise answers."
   tts:
-    url: "http://127.0.0.1:8880/v1/audio/speech"
-    wsUrl: "http://127.0.0.1:8880/v1/ws/tts/stream"
+    url: "http://47.84.180.15:8880/v1/audio/speech"
+    wsUrl: "ws://47.84.180.15:8880/v1/ws/tts/stream"
     voice: "af_heart"
     format: "pcm"
     sampleRate: 24000
     channels: 1
     bitDepth: 16
-management:
-  endpoints:
-    web:
-      exposure:
-        include: "health,info,prometheus"
+  management:
+    endpoints:
+      web:
+        exposure:
+          include: "health,info,prometheus"

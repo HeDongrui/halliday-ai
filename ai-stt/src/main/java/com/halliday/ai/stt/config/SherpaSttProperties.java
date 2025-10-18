@@ -11,7 +11,7 @@ public class SherpaSttProperties {
     /**
      * WebSocket 地址，例如 ws://127.0.0.1:8000/asr?samplerate=16000。
      */
-    private String wsUrl = "ws://127.0.0.1:8000/asr?samplerate=16000";
+    private String wsUrl;
 
     /**
      * PCM 帧大小，默认为 20ms 对应的字节数（16kHz * 2 字节 * 0.02s = 640）。

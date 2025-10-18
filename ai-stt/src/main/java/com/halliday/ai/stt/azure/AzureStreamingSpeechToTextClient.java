@@ -1,5 +1,6 @@
 package com.halliday.ai.stt.azure;
 
+import com.halliday.ai.common.spi.NamedService;
 import com.halliday.ai.common.stt.SttResult;
 import com.halliday.ai.stt.config.AzureSttProperties;
 import com.halliday.ai.stt.core.StreamingSpeechToTextClient;
@@ -28,7 +29,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
-public class AzureStreamingSpeechToTextClient implements StreamingSpeechToTextClient {
+public class AzureStreamingSpeechToTextClient implements StreamingSpeechToTextClient, NamedService {
 
     private static final Logger log = LoggerFactory.getLogger(AzureStreamingSpeechToTextClient.class);
     private static final AtomicInteger THREAD_COUNTER = new AtomicInteger();
@@ -39,6 +40,11 @@ public class AzureStreamingSpeechToTextClient implements StreamingSpeechToTextCl
     public AzureStreamingSpeechToTextClient(AzureSttProperties properties) {
         this.properties = Objects.requireNonNull(properties, "properties");
         this.executor = Executors.newCachedThreadPool(new AzureThreadFactory());
+    }
+
+    @Override
+    public String id() {
+        return "azure";
     }
 
     @Override

@@ -270,18 +270,56 @@
     }
 
     function updateSttProviderOptions(providers, defaultProvider) {
-        const normalizedList = Array.isArray(providers)
-            ? providers.map(value => String(value).toLowerCase())
-            : [];
         const normalizedDefault = typeof defaultProvider === 'string' ? defaultProvider.toLowerCase() : '';
         const currentValue = (sttProviderSelect.value || '').toLowerCase();
-        availableSttProviders = new Set(normalizedList);
+        const normalizedPairs = [];
 
+        if (Array.isArray(providers)) {
+            providers.forEach((item) => {
+                if (typeof item === 'string') {
+                    const id = item.toLowerCase();
+                    if (!id) return;
+                    const name = sttProviderLabels[id] || item;
+                    sttProviderLabels[id] = name;
+                    normalizedPairs.push({ id, name });
+                    return;
+                }
+                if (item && typeof item === 'object') {
+                    const id = String(item.id || '').toLowerCase();
+                    if (!id) return;
+                    const name = String(item.name || item.displayName || item.id || id);
+                    sttProviderLabels[id] = name;
+                    normalizedPairs.push({ id, name });
+                }
+            });
+        }
+
+        if (normalizedPairs.length > 0) {
+            const previousValue = sttProviderSelect.value;
+            sttProviderSelect.innerHTML = '';
+            normalizedPairs.forEach(({ id, name }) => {
+                const option = document.createElement('option');
+                option.value = id;
+                option.textContent = name;
+                sttProviderSelect.appendChild(option);
+            });
+            if (previousValue) {
+                sttProviderSelect.value = previousValue;
+            }
+        }
+
+        availableSttProviders = new Set(normalizedPairs.map(({ id }) => id));
         const enableAll = availableSttProviders.size === 0;
-        Array.from(sttProviderSelect.options).forEach(option => {
-            const value = option.value.toLowerCase();
-            option.disabled = !enableAll && !availableSttProviders.has(value);
-        });
+
+        if (enableAll) {
+            Array.from(sttProviderSelect.options).forEach(option => {
+                option.disabled = false;
+            });
+        } else {
+            Array.from(sttProviderSelect.options).forEach(option => {
+                option.disabled = !availableSttProviders.has(option.value.toLowerCase());
+            });
+        }
 
         const candidates = [];
         if (preferredSttProvider) {
@@ -293,20 +331,24 @@
         if (normalizedDefault && !candidates.includes(normalizedDefault)) {
             candidates.push(normalizedDefault);
         }
-        const firstOption = Array.from(sttProviderSelect.options)
-            .map(option => option.value.toLowerCase())
-            .find(value => enableAll || availableSttProviders.has(value));
-        if (firstOption && !candidates.includes(firstOption)) {
-            candidates.push(firstOption);
-        }
-        if (!enableAll) {
-            const firstAvailable = availableSttProviders.values().next();
-            if (!firstAvailable.done && !candidates.includes(firstAvailable.value)) {
-                candidates.push(firstAvailable.value);
+        const orderedIds = normalizedPairs.map(({ id }) => id);
+        orderedIds.forEach(id => {
+            if (!candidates.includes(id)) {
+                candidates.push(id);
             }
-        }
+        });
+        Array.from(sttProviderSelect.options).forEach(option => {
+            const id = option.value.toLowerCase();
+            if (!candidates.includes(id)) {
+                candidates.push(id);
+            }
+        });
 
-        const nextValue = candidates.find(value => enableAll || availableSttProviders.has(value)) || '';
+        const nextValue = candidates.find(value => {
+            if (!value) return false;
+            return enableAll || availableSttProviders.has(value);
+        }) || '';
+
         if (nextValue) {
             preferredSttProvider = nextValue;
             if (sttProviderSelect.value.toLowerCase() !== nextValue) {
@@ -316,10 +358,7 @@
             preferredSttProvider = sttProviderSelect.value.toLowerCase();
         }
 
-        const finalProviders = enableAll
-            ? Array.from(new Set(Array.from(sttProviderSelect.options).map(option => option.value.toLowerCase())))
-            : Array.from(availableSttProviders);
-        return finalProviders;
+        return enableAll ? Array.from(new Set(Array.from(sttProviderSelect.options).map(option => option.value.toLowerCase()))) : Array.from(availableSttProviders);
     }
 
     function resetUi() {
@@ -607,7 +646,7 @@
             case 'listening':
                 if (data.sttProvider) {
                     const key = String(data.sttProvider).toLowerCase();
-                    const providerName = sttProviderLabels[key] || data.sttProvider;
+                    const providerName = data.sttProviderName || sttProviderLabels[key] || data.sttProvider;
                     log(`使用 STT 服务：${providerName}`);
                     const hasOption = Array.from(sttProviderSelect.options)
                         .some(option => option.value.toLowerCase() === key);

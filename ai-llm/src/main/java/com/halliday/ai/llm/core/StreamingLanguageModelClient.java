@@ -12,7 +12,7 @@ public interface StreamingLanguageModelClient {
 
     Logger log = LoggerFactory.getLogger(StreamingLanguageModelClient.class);
 
-    static {
+    static void init() {
         log.debug("【大模型接口】StreamingLanguageModelClient 接口已加载，准备处理流式对话");
     }
 

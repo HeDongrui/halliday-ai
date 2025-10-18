@@ -12,7 +12,7 @@ public enum ConversationRole {
 
     private static final Logger log = LoggerFactory.getLogger(ConversationRole.class);
 
-    static {
+    static void init() {
         log.debug("【会话角色】初始化完成，可用角色：{}", Arrays.toString(values()));
     }
 }

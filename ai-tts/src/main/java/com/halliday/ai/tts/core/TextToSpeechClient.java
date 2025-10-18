@@ -8,7 +8,7 @@ public interface TextToSpeechClient {
 
     Logger log = LoggerFactory.getLogger(TextToSpeechClient.class);
 
-    static {
+    static void init() {
         log.debug("【语音合成接口】TextToSpeechClient 接口已加载");
     }
 

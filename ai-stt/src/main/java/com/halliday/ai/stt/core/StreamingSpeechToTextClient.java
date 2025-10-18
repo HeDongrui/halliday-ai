@@ -11,7 +11,7 @@ public interface StreamingSpeechToTextClient {
 
     Logger log = LoggerFactory.getLogger(StreamingSpeechToTextClient.class);
 
-    static {
+    static void init() {
         log.debug("【语音识别接口】StreamingSpeechToTextClient 接口已加载，准备处理流式识别");
     }
 

@@ -10,7 +10,7 @@ public interface LanguageModelClient {
 
     Logger log = LoggerFactory.getLogger(LanguageModelClient.class);
 
-    static {
+    static void init() {
         log.debug("【大模型接口】LanguageModelClient 接口已加载，准备处理对话请求");
     }
 

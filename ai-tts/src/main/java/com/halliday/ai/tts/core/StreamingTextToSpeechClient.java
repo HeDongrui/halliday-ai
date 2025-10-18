@@ -9,7 +9,7 @@ public interface StreamingTextToSpeechClient {
 
     Logger log = LoggerFactory.getLogger(StreamingTextToSpeechClient.class);
 
-    static {
+    static void init() {
         log.debug("【语音合成接口】StreamingTextToSpeechClient 接口已加载");
     }
 

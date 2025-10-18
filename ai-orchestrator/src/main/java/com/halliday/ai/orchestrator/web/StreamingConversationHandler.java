@@ -1,5 +1,6 @@
 package com.halliday.ai.orchestrator.web;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -14,6 +15,13 @@ import com.halliday.ai.stt.core.StreamingSpeechToTextClient;
 import com.halliday.ai.tts.config.KokoroTtsProperties;
 import com.halliday.ai.tts.core.StreamingTextToSpeechClient;
 import com.halliday.ai.tts.core.TextToSpeechClient;
+import com.halliday.ai.trace.persistence.entity.AiTraceErrorEntity;
+import com.halliday.ai.trace.persistence.entity.AiTraceEventEntity;
+import com.halliday.ai.trace.persistence.entity.AiTraceLlmEntity;
+import com.halliday.ai.trace.persistence.entity.AiTraceSessionEntity;
+import com.halliday.ai.trace.persistence.entity.AiTraceSttEntity;
+import com.halliday.ai.trace.persistence.entity.AiTraceTtsEntity;
+import com.halliday.ai.trace.service.TraceRecordService;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,7 +35,13 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import java.io.IOException;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
@@ -36,6 +50,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -58,6 +74,10 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
     private final StreamingTextToSpeechClient streamingTtsClient;
     private final TextToSpeechClient blockingTtsClient;
     private final KokoroTtsProperties ttsProperties;
+    private final TraceRecordService traceRecordService;
+    private final String streamingTtsEngineName;
+    private final String blockingTtsEngineName;
+    private final ZoneId traceZoneId = ZoneOffset.UTC;
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final Map<String, SessionContext> sessions = new ConcurrentHashMap<>();
 
@@ -66,7 +86,8 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                                         StreamingLanguageModelClient llmClient,
                                         StreamingTextToSpeechClient streamingTtsClient,
                                         TextToSpeechClient blockingTtsClient,
-                                        KokoroTtsProperties ttsProperties) {
+                                        KokoroTtsProperties ttsProperties,
+                                        TraceRecordService traceRecordService) {
         this.mapper = Objects.requireNonNull(mapper, "mapper");
         Objects.requireNonNull(sttClients, "sttClients");
         Map<String, StreamingSpeechToTextClient> clientMap = new LinkedHashMap<>();
@@ -95,6 +116,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         this.streamingTtsClient = Objects.requireNonNull(streamingTtsClient, "streamingTtsClient");
         this.blockingTtsClient = Objects.requireNonNull(blockingTtsClient, "blockingTtsClient");
         this.ttsProperties = Objects.requireNonNull(ttsProperties, "ttsProperties");
+        this.traceRecordService = Objects.requireNonNull(traceRecordService, "traceRecordService");
+        this.streamingTtsEngineName = determineEngineName(streamingTtsClient);
+        this.blockingTtsEngineName = determineEngineName(blockingTtsClient);
         log.debug("【流式会话】初始化完成，STT 服务数量：{}，默认 STT：{}", this.sttClients.size(), this.defaultSttProvider);
     }
 
@@ -112,6 +136,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         SessionContext context = new SessionContext(defaultSttProvider);
         sessions.put(session.getId(), context);
         ObjectNode ready = event("ready");
+        ready.put("traceId", context.traceId);
         ArrayNode providers = ready.putArray("sttProviders");
         availableSttProviders.forEach(id -> {
             ObjectNode item = providers.addObject();
@@ -130,6 +155,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         SessionContext ctx = sessions.remove(session.getId());
         if (ctx != null) {
             ctx.dispose();
+            finalizeSession(ctx);
         }
         log.debug("【流式会话】WebSocket 会话关闭，ID={}，状态码={}", session.getId(), status.getCode());
     }
@@ -178,6 +204,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             return;
         }
         ctx.sttProvider = provider;
+        ctx.beginTraceRound(node, provider);
         ctx.turnActive.set(true);
         ctx.capturing.set(true);
         log.info("【流式会话】已选择 STT 服务：{}", ctx.sttProvider);
@@ -251,6 +278,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         }
         ctx.initAudioPipe();
         ctx.asrStartMs = System.currentTimeMillis();
+        if (ctx.traceContext != null) {
+            ctx.traceContext.recordSttStreamStart(Instant.ofEpochMilli(ctx.asrStartMs));
+        }
         log.info("【流式会话】启动语音识别，提供者：{}", ctx.sttProvider);
         ObjectNode extra = mapper.createObjectNode();
         extra.put("sampleRate", ctx.inputFormat.sampleRate());
@@ -265,6 +295,12 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             } catch (Exception ex) {
                 log.warn("【流式会话】语音识别流程出现异常", ex);
                 long end = System.currentTimeMillis();
+                if (ctx.traceContext != null) {
+                    ctx.traceContext.recordError("stt", "STT_ERROR", ex.getMessage(), ex, Instant.ofEpochMilli(end));
+                    if (ctx.traceContext.completeFailure(Instant.ofEpochMilli(end), ex.getMessage())) {
+                        ctx.traceContext = null;
+                    }
+                }
                 ObjectNode errorExtra = mapper.createObjectNode();
                 errorExtra.put("message", ex.getMessage());
                 errorExtra.put("provider", ctx.sttProvider);
@@ -278,6 +314,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
 
     private void handleSttResult(WebSocketSession session, SessionContext ctx, SttResult result) {
         String text = result.getText() == null ? "" : result.getText().trim();
+        if (ctx.traceContext != null) {
+            ctx.traceContext.recordSttResult(result, text, Instant.now());
+        }
         if (StringUtils.hasText(text)) {
             ctx.updateTranscript(text, result.isFinished());
             ObjectNode msg = event("transcript");
@@ -307,10 +346,21 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         ctx.closeAudioInput();
         String userText = ctx.consumeTranscript();
         if (!StringUtils.hasText(userText)) {
+            if (ctx.traceContext != null) {
+                Instant now = Instant.now();
+                ctx.traceContext.recordNoSpeech(now);
+                if (ctx.traceContext.completeSuccess(now)) {
+                    ctx.traceContext = null;
+                }
+            }
             sendSafely(session, event("no_speech"));
             ctx.turnActive.set(false);
             ctx.processing.set(false);
             return;
+        }
+        Instant transcriptTime = Instant.now();
+        if (ctx.traceContext != null) {
+            ctx.traceContext.recordUserMessage(userText, transcriptTime);
         }
         ctx.history.add(new ConversationMessage(ConversationRole.USER, userText));
         streamAssistant(session, ctx, userText);
@@ -327,6 +377,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             llmStartExtra.put("userTextPreview", userText.length() > 160 ? userText.substring(0, 160) : userText);
             llmStartExtra.set("requestHistory", toHistoryArray(ctx.history));
             sendDebug(session, "llm", "start", "LLM streaming started", ctx.llmStartMs, null, llmStartExtra);
+            if (ctx.traceContext != null) {
+                ctx.traceContext.recordLlmStart(new ArrayList<>(ctx.history), Instant.ofEpochMilli(ctx.llmStartMs));
+            }
             try {
                 llmClient.streamChat(new ArrayList<>(ctx.history), delta -> {
                     if (!StringUtils.hasText(delta)) {
@@ -351,11 +404,23 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                         llmExtra.set("metadata", mapper.valueToTree(completion.metadata()));
                     }
                     sendDebug(session, "llm", "complete", "LLM streaming finished", ctx.llmStartMs, llmEnd, llmExtra);
+                    if (ctx.traceContext != null) {
+                        Instant completionTime = Instant.ofEpochMilli(llmEnd);
+                        ctx.traceContext.recordLlmCompletion(finalText, completion.metadata(), completionTime);
+                        ctx.traceContext.recordAssistantMessage(finalText, completionTime);
+                    }
                     ctx.ttsChain.whenComplete((ignored, throwable) -> {
                         if (throwable != null) {
                             ObjectNode ttsErrorExtra = mapper.createObjectNode();
                             ttsErrorExtra.put("message", throwable.getMessage());
                             sendDebug(session, "tts", "error", "TTS chain failed", ctx.ttsStartMs, System.currentTimeMillis(), ttsErrorExtra);
+                            if (ctx.traceContext != null) {
+                                Instant errorTime = Instant.now();
+                                ctx.traceContext.recordError("tts", "TTS_CHAIN_ERROR", throwable.getMessage(), throwable, errorTime);
+                                if (ctx.traceContext.completeFailure(errorTime, throwable.getMessage())) {
+                                    ctx.traceContext = null;
+                                }
+                            }
                             sendSafely(session, error("TTS_ERROR", throwable.getMessage()));
                         }
                         long ttsEnd = System.currentTimeMillis();
@@ -369,6 +434,11 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                             ttsExtra.put("sentences", ctx.ttsIndex.get());
                             sendDebug(session, "tts", "complete", "TTS playback finished", ctx.ttsStartMs, ttsEnd, ttsExtra);
                         }
+                        if (throwable == null && ctx.traceContext != null) {
+                            if (ctx.traceContext.completeSuccess(Instant.ofEpochMilli(ttsEnd))) {
+                                ctx.traceContext = null;
+                            }
+                        }
                         ctx.turnActive.set(false);
                         ctx.processing.set(false);
                     });
@@ -377,6 +447,13 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                 ObjectNode errExtra = mapper.createObjectNode();
                 errExtra.put("message", ex.getMessage());
                 sendDebug(session, "llm", "error", "LLM streaming failed", ctx.llmStartMs, System.currentTimeMillis(), errExtra);
+                if (ctx.traceContext != null) {
+                    Instant errorTime = Instant.now();
+                    ctx.traceContext.recordError("llm", "LLM_ERROR", ex.getMessage(), ex, errorTime);
+                    if (ctx.traceContext.completeFailure(errorTime, ex.getMessage())) {
+                        ctx.traceContext = null;
+                    }
+                }
                 sendSafely(session, error("LLM_ERROR", ex.getMessage()));
                 ctx.turnActive.set(false);
                 ctx.processing.set(false);
@@ -413,6 +490,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         CompletableFuture<Void> completed = new CompletableFuture<>();
         int sentenceIndex = ctx.ttsIndex.incrementAndGet();
         long start = System.currentTimeMillis();
+        Instant segmentStart = Instant.ofEpochMilli(start);
         if (ctx.ttsStartMs == 0) {
             ctx.ttsStartMs = start;
         }
@@ -422,6 +500,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         startExtra.put("text", sentence);
         startExtra.put("textPreview", sentence.length() > 160 ? sentence.substring(0, 160) : sentence);
         sendDebug(session, "tts", "start", "Streaming TTS sentence", start, null, startExtra);
+        if (ctx.traceContext != null) {
+            ctx.traceContext.recordTtsSentenceStart(sentenceIndex, sentence, segmentStart);
+        }
         try {
             streamingTtsClient.streamSynthesize(sentence, null, chunk -> {
                 if (chunk == null || chunk.length == 0) {
@@ -439,11 +520,15 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             errorExtra.put("sentenceIndex", sentenceIndex);
             errorExtra.put("message", ex.getMessage());
             sendDebug(session, "tts", "error", "Streaming TTS failed", start, errorTime, errorExtra);
+            if (ctx.traceContext != null) {
+                ctx.traceContext.recordError("tts", "STREAMING_TTS_ERROR", ex.getMessage(), ex, Instant.ofEpochMilli(errorTime));
+            }
             completed.completeExceptionally(ex);
         }
 
         if (!delivered.get()) {
             long fallbackStart = System.currentTimeMillis();
+            Instant fallbackStartInstant = Instant.ofEpochMilli(fallbackStart);
             ObjectNode fallbackExtra = mapper.createObjectNode();
             fallbackExtra.put("sentenceIndex", sentenceIndex);
             fallbackExtra.put("textLength", sentence.length());
@@ -457,6 +542,10 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                     long fallbackEnd = System.currentTimeMillis();
                     fallbackExtra.put("bytes", audio.length);
                     sendDebug(session, "tts", "fallback-complete", "Fallback TTS finished", fallbackStart, fallbackEnd, fallbackExtra);
+                    if (ctx.traceContext != null) {
+                        ctx.traceContext.recordTtsSentenceComplete(sentenceIndex, sentence, fallbackStartInstant,
+                                Instant.ofEpochMilli(fallbackEnd), true, 0);
+                    }
                 }
             } catch (Exception ex) {
                 ObjectNode fallbackError = mapper.createObjectNode();
@@ -464,6 +553,13 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                 fallbackError.put("textLength", sentence.length());
                 fallbackError.put("message", ex.getMessage());
                 sendDebug(session, "tts", "fallback-error", "Fallback TTS failed", fallbackStart, System.currentTimeMillis(), fallbackError);
+                if (ctx.traceContext != null) {
+                    Instant errorInstant = Instant.now();
+                    ctx.traceContext.recordError("tts", "TTS_FALLBACK_ERROR", ex.getMessage(), ex, errorInstant);
+                    if (ctx.traceContext.completeFailure(errorInstant, ex.getMessage())) {
+                        ctx.traceContext = null;
+                    }
+                }
                 sendSafely(session, error("TTS_ERROR", ex.getMessage()));
             }
         } else {
@@ -473,6 +569,10 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             completeExtra.put("chunks", chunkCount.get());
             completeExtra.put("textLength", sentence.length());
             sendDebug(session, "tts", "sentence-complete", "Streaming TTS sentence finished", start, end, completeExtra);
+            if (ctx.traceContext != null) {
+                ctx.traceContext.recordTtsSentenceComplete(sentenceIndex, sentence, segmentStart,
+                        Instant.ofEpochMilli(end), false, chunkCount.get());
+            }
         }
     }
 
@@ -620,6 +720,43 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         return clients.keySet().iterator().next();
     }
 
+    private String determineEngineName(Object client) {
+        if (client instanceof NamedService namedService) {
+            return namedService.id();
+        }
+        return client == null ? "unknown" : client.getClass().getSimpleName();
+    }
+
+    private void finalizeSession(SessionContext ctx) {
+        if (ctx.sessionSnapshot == null) {
+            return;
+        }
+        Instant now = Instant.now();
+        if (ctx.sessionStartInstant == null) {
+            ctx.sessionStartInstant = now;
+            ctx.sessionSnapshot.setStartTime(LocalDateTime.ofInstant(now, traceZoneId));
+        }
+        ctx.sessionSnapshot.setEndTime(LocalDateTime.ofInstant(now, traceZoneId));
+        ctx.sessionSnapshot.setDurationMs(Duration.between(ctx.sessionStartInstant, now).toMillis());
+        if (!ctx.sessionFailed) {
+            ctx.sessionSnapshot.setStatus("success");
+            ctx.sessionSnapshot.setErrorMessage(null);
+        }
+        int lastRound = Math.max(0, ctx.roundSequence.get() - 1);
+        ctx.sessionSnapshot.setRoundIndex(lastRound);
+        try {
+            traceRecordService.persistRound(
+                    ctx.sessionSnapshot,
+                    Collections.emptyList(),
+                    Collections.emptyList(),
+                    null,
+                    Collections.emptyList(),
+                    Collections.emptyList());
+        } catch (RuntimeException ex) {
+            log.warn("【流式会话】关闭会话时更新会话状态失败，traceId={}", ctx.traceId, ex);
+        }
+    }
+
     private String normalizeProviderKey(String name) {
         return sanitizeProviderId(name);
     }
@@ -670,21 +807,28 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         }
     }
 
-    private static class SessionContext {
-        AudioFormat inputFormat = AudioFormat.PCM16_MONO_16K;
-        final List<ConversationMessage> history = new ArrayList<>();
-        final AtomicBoolean capturing = new AtomicBoolean(false);
-        final AtomicBoolean turnActive = new AtomicBoolean(false);
-        final AtomicBoolean processing = new AtomicBoolean(false);
-        String sttProvider;
-        PipedInputStream audioInput;
-        PipedOutputStream audioOutput;
-        final StringBuilder transcriptBuffer = new StringBuilder();
-        CompletableFuture<Void> ttsChain = CompletableFuture.completedFuture(null);
-        long asrStartMs;
-        long llmStartMs;
-        long ttsStartMs;
-        final AtomicInteger ttsIndex = new AtomicInteger();
+    private class SessionContext {
+        private final String traceId = UUID.randomUUID().toString().replace("-", "");
+        private final List<ConversationMessage> history = new ArrayList<>();
+        private final AtomicBoolean capturing = new AtomicBoolean(false);
+        private final AtomicBoolean turnActive = new AtomicBoolean(false);
+        private final AtomicBoolean processing = new AtomicBoolean(false);
+        private final AtomicInteger ttsIndex = new AtomicInteger();
+        private final AtomicInteger roundSequence = new AtomicInteger();
+        private final StringBuilder transcriptBuffer = new StringBuilder();
+        private AudioFormat inputFormat = AudioFormat.PCM16_MONO_16K;
+        private String sttProvider;
+        private PipedInputStream audioInput;
+        private PipedOutputStream audioOutput;
+        private CompletableFuture<Void> ttsChain = CompletableFuture.completedFuture(null);
+        private long asrStartMs;
+        private long llmStartMs;
+        private long ttsStartMs;
+        private Long userId;
+        private Instant sessionStartInstant;
+        private AiTraceSessionEntity sessionSnapshot;
+        private boolean sessionFailed;
+        private TurnTraceContext traceContext;
 
         SessionContext(String defaultProvider) {
             this.sttProvider = defaultProvider;
@@ -697,6 +841,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             llmStartMs = 0L;
             ttsStartMs = 0L;
             ttsIndex.set(0);
+            traceContext = null;
         }
 
         void initAudioPipe() throws IOException {
@@ -715,6 +860,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         }
 
         void dispose() {
+            failActiveTrace("Session disposed before completion");
             closeAudioInput();
             if (audioOutput != null) {
                 try {
@@ -725,12 +871,10 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         }
 
         void updateTranscript(String text, boolean isFinal) {
-            if (isFinal) {
-                transcriptBuffer.setLength(0);
-                transcriptBuffer.append(text);
-            } else {
-                transcriptBuffer.setLength(0);
-                transcriptBuffer.append(text);
+            transcriptBuffer.setLength(0);
+            transcriptBuffer.append(text);
+            if (traceContext != null) {
+                traceContext.recordPartialTranscript(text, isFinal, Instant.now());
             }
         }
 
@@ -738,6 +882,487 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             String value = transcriptBuffer.toString();
             transcriptBuffer.setLength(0);
             return value.trim();
+        }
+
+        void beginTraceRound(JsonNode payload, String provider) {
+            this.userId = payload.path("userId").canConvertToLong() ? payload.path("userId").longValue() : userId;
+            Instant now = Instant.now();
+            if (sessionStartInstant == null) {
+                sessionStartInstant = now;
+            }
+            ensureSessionSnapshot(now);
+            int roundIndex = roundSequence.getAndIncrement();
+            traceContext = new TurnTraceContext(this, provider, new ArrayList<>(history), now, roundIndex);
+        }
+
+        void ensureSessionSnapshot(Instant reference) {
+            if (sessionSnapshot == null) {
+                sessionSnapshot = new AiTraceSessionEntity()
+                        .setTraceId(traceId)
+                        .setUserId(userId)
+                        .setStartTime(LocalDateTime.ofInstant(reference, traceZoneId))
+                        .setStatus("running");
+            } else {
+                sessionSnapshot.setUserId(userId);
+                if (sessionSnapshot.getStartTime() == null && sessionStartInstant != null) {
+                    sessionSnapshot.setStartTime(LocalDateTime.ofInstant(sessionStartInstant, traceZoneId));
+                }
+                sessionSnapshot.setStatus("running");
+            }
+        }
+
+        void failActiveTrace(String message) {
+            if (traceContext != null) {
+                if (traceContext.completeFailure(Instant.now(), message)) {
+                    traceContext = null;
+                }
+            }
+        }
+    }
+
+    private final class TurnTraceContext {
+
+        private static final Logger traceLog = LoggerFactory.getLogger(TurnTraceContext.class);
+
+        private final SessionContext sessionContext;
+        private final String traceId;
+        private final int roundIndex;
+        private final Long userId;
+        private final String sttProvider;
+        private final List<ConversationMessage> promptHistory;
+        private final Instant turnStart;
+        private final AudioFormat inputFormat;
+        private final List<AiTraceEventEntity> events = new ArrayList<>();
+        private final List<AiTraceSttEntity> sttSegments = new ArrayList<>();
+        private final List<AiTraceTtsEntity> ttsSegments = new ArrayList<>();
+        private final List<AiTraceErrorEntity> errors = new ArrayList<>();
+        private final AtomicBoolean completed = new AtomicBoolean(false);
+        private final Object monitor = new Object();
+
+        private Instant sttStart;
+        private Instant lastSttSegmentEnd;
+        private Instant llmStart;
+        private String finalUserText;
+        private String assistantResponse;
+        private Map<String, Object> llmMetadata;
+        private AiTraceLlmEntity llmRecord;
+
+        TurnTraceContext(SessionContext sessionContext,
+                         String sttProvider,
+                         List<ConversationMessage> historySnapshot,
+                         Instant turnStart,
+                         int roundIndex) {
+            this.sessionContext = sessionContext;
+            this.traceId = sessionContext.traceId;
+            this.roundIndex = roundIndex;
+            this.userId = sessionContext.userId;
+            this.sttProvider = sttProvider;
+            this.promptHistory = new ArrayList<>(historySnapshot);
+            this.turnStart = turnStart;
+            this.inputFormat = sessionContext.inputFormat;
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("sttProvider", sttProvider);
+            metadata.put("historySize", this.promptHistory.size());
+            recordEvent("orchestrator", "turn_start", "Streaming turn started", turnStart, null, metadata);
+        }
+
+        void recordSttStreamStart(Instant start) {
+            this.sttStart = start;
+            this.lastSttSegmentEnd = start;
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("sampleRate", inputFormat.sampleRate());
+            metadata.put("channels", inputFormat.channels());
+            metadata.put("bitDepth", inputFormat.bitDepth());
+            metadata.put("provider", sttProvider);
+            recordEvent("stt", "start", "STT streaming started", start, null, metadata);
+        }
+
+        void recordSttResult(SttResult result, String text, Instant timestamp) {
+            Instant segmentStart = Optional.ofNullable(lastSttSegmentEnd).orElse(Optional.ofNullable(sttStart).orElse(timestamp));
+            lastSttSegmentEnd = timestamp;
+            AiTraceSttEntity entity = new AiTraceSttEntity()
+                    .setSegmentIndex(Math.max(0, result.getIdx()))
+                    .setEngineName(sttProvider)
+                    .setLanguage(null)
+                    .setRequestParams(null)
+                    .setResponseJson(null)
+                    .setIsFinal(result.isFinished())
+                    .setRecognizedText(text)
+                    .setConfidence(null)
+                    .setStartTime(toDateTime(segmentStart))
+                    .setEndTime(toDateTime(timestamp))
+                    .setDurationMs(durationMillis(segmentStart, timestamp));
+            synchronized (monitor) {
+                sttSegments.add(entity);
+            }
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("idx", result.getIdx());
+            metadata.put("final", result.isFinished());
+            metadata.put("length", text == null ? 0 : text.length());
+            if (StringUtils.hasText(text)) {
+                metadata.put("text", text);
+            }
+            recordEvent("stt", result.isFinished() ? "complete" : "delta", "STT transcript updated", timestamp,
+                    durationMillis(segmentStart, timestamp), metadata);
+            if (result.isFinished()) {
+                recordPartialTranscript(text, true, timestamp);
+            }
+        }
+
+        void recordPartialTranscript(String text, boolean isFinal, Instant timestamp) {
+            if (isFinal && StringUtils.hasText(text)) {
+                this.finalUserText = text.trim();
+            }
+        }
+
+        void recordNoSpeech(Instant timestamp) {
+            recordEvent("orchestrator", "no_speech", "No speech detected", timestamp, null, Map.of());
+        }
+
+        void recordUserMessage(String text, Instant timestamp) {
+            if (StringUtils.hasText(text)) {
+                this.finalUserText = text.trim();
+                this.promptHistory.add(new ConversationMessage(ConversationRole.USER, text));
+            }
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("length", text == null ? 0 : text.length());
+            recordEvent("orchestrator", "user_text", "User text finalized", timestamp, durationMillis(turnStart, timestamp), metadata);
+        }
+
+        void recordLlmStart(List<ConversationMessage> prompt, Instant start) {
+            this.llmStart = start;
+            this.promptHistory.clear();
+            this.promptHistory.addAll(prompt);
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("historySize", prompt.size());
+            metadata.put("userTextLength", finalUserText == null ? 0 : finalUserText.length());
+            recordEvent("llm", "start", "LLM streaming started", start, null, metadata);
+        }
+
+        void recordLlmCompletion(String response, Map<String, Object> metadata, Instant end) {
+            this.assistantResponse = response;
+            this.llmMetadata = metadata == null ? Collections.emptyMap() : new LinkedHashMap<>(metadata);
+            AiTraceLlmEntity entity = new AiTraceLlmEntity()
+                    .setModelName(resolveModelName(llmMetadata))
+                    .setPromptText(toJson(promptHistory))
+                    .setResponseText(response)
+                    .setToolCalls(null)
+                    .setInputTokens(extractUsageToken(llmMetadata, "prompt_tokens"))
+                    .setOutputTokens(extractUsageToken(llmMetadata, "completion_tokens"))
+                    .setTotalTokens(extractUsageToken(llmMetadata, "total_tokens"))
+                    .setStartTime(toDateTime(llmStart))
+                    .setEndTime(toDateTime(end))
+                    .setLatencyMs(durationMillis(llmStart, end))
+                    .setFinishReason(resolveFinishReason(llmMetadata))
+                    .setRequestParams(toJson(buildLlmRequestParams()))
+                    .setResponseJson(toJson(llmMetadata));
+            synchronized (monitor) {
+                llmRecord = entity;
+            }
+            Map<String, Object> extra = new LinkedHashMap<>();
+            extra.put("length", response == null ? 0 : response.length());
+            recordEvent("llm", "complete", "LLM streaming completed", end, durationMillis(llmStart, end), extra);
+        }
+
+        void recordAssistantMessage(String text, Instant timestamp) {
+            if (StringUtils.hasText(text)) {
+                this.assistantResponse = text;
+            }
+            this.promptHistory.add(new ConversationMessage(ConversationRole.ASSISTANT, text == null ? "" : text));
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("length", text == null ? 0 : text.length());
+            recordEvent("orchestrator", "assistant_text", "Assistant text finalized", timestamp,
+                    durationMillis(llmStart, timestamp), metadata);
+        }
+
+        void recordTtsSentenceStart(int index, String sentence, Instant start) {
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("index", index);
+            metadata.put("length", sentence == null ? 0 : sentence.length());
+            recordEvent("tts", "sentence_start", "TTS sentence synthesis started", start, null, metadata);
+        }
+
+        void recordTtsSentenceComplete(int index,
+                                       String sentence,
+                                       Instant start,
+                                       Instant end,
+                                       boolean fallback,
+                                       int chunkCount) {
+            AiTraceTtsEntity entity = new AiTraceTtsEntity()
+                    .setSegmentIndex(Math.max(0, index - 1))
+                    .setInputText(sentence)
+                    .setVoiceName(ttsProperties.voice())
+                    .setEngineName(fallback ? blockingTtsEngineName : streamingTtsEngineName)
+                    .setSampleRate(fallback ? blockingTtsClient.outputFormat().sampleRate() : ttsProperties.getSampleRate())
+                    .setFormat(resolveTtsFormat(fallback))
+                    .setOutputAudioUrl(null)
+                    .setStartTime(toDateTime(start))
+                    .setEndTime(toDateTime(end))
+                    .setDurationMs(durationMillis(start, end))
+                    .setRequestParams(toJson(buildTtsParams(fallback)))
+                    .setResponseJson(toJson(buildTtsResponseMetadata(fallback, chunkCount)));
+            synchronized (monitor) {
+                ttsSegments.add(entity);
+            }
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("index", index);
+            metadata.put("fallback", fallback);
+            metadata.put("chunks", chunkCount);
+            metadata.put("length", sentence == null ? 0 : sentence.length());
+            recordEvent("tts", "sentence_complete", "TTS sentence synthesis completed", end, durationMillis(start, end), metadata);
+        }
+
+        void recordError(String phase, String code, String message, Throwable throwable, Instant occur) {
+            AiTraceErrorEntity entity = new AiTraceErrorEntity()
+                    .setPhase(phase)
+                    .setErrorCode(code)
+                    .setErrorMessage(message)
+                    .setStackTrace(stackTraceOf(throwable))
+                    .setOccurTime(toDateTime(occur));
+            synchronized (monitor) {
+                errors.add(entity);
+            }
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("code", code);
+            if (StringUtils.hasText(message)) {
+                metadata.put("message", message);
+            }
+            recordEvent(phase, "error", "Error occurred", occur, null, metadata);
+        }
+
+        boolean completeSuccess(Instant end) {
+            if (!completed.compareAndSet(false, true)) {
+                return false;
+            }
+            List<AiTraceEventEntity> eventsSnapshot;
+            List<AiTraceSttEntity> sttSnapshot;
+            List<AiTraceTtsEntity> ttsSnapshot;
+            List<AiTraceErrorEntity> errorsSnapshot;
+            AiTraceLlmEntity llmSnapshot;
+            synchronized (monitor) {
+                events.add(newEvent("orchestrator", "turn_complete", "Turn completed successfully", end,
+                        durationMillis(turnStart, end), buildCompletionMetadata(false)));
+                eventsSnapshot = new ArrayList<>(events);
+                sttSnapshot = new ArrayList<>(sttSegments);
+                ttsSnapshot = new ArrayList<>(ttsSegments);
+                errorsSnapshot = new ArrayList<>(errors);
+                llmSnapshot = llmRecord;
+            }
+            AiTraceSessionEntity session = sessionContext.sessionSnapshot;
+            session.setRoundIndex(roundIndex);
+            session.setStatus("success");
+            session.setErrorMessage(null);
+            session.setEndTime(toDateTime(end));
+            if (sessionContext.sessionStartInstant != null) {
+                session.setDurationMs(durationMillis(sessionContext.sessionStartInstant, end));
+            }
+            if (llmSnapshot != null) {
+                if (StringUtils.hasText(llmSnapshot.getModelName())) {
+                    session.setLlmModel(llmSnapshot.getModelName());
+                }
+                session.setLlmInputTokens(llmSnapshot.getInputTokens());
+                session.setLlmOutputTokens(llmSnapshot.getOutputTokens());
+                session.setLlmTotalTokens(llmSnapshot.getTotalTokens());
+            }
+            sessionContext.sessionFailed = false;
+            persist(session, eventsSnapshot, sttSnapshot, llmSnapshot, ttsSnapshot, errorsSnapshot);
+            return true;
+        }
+
+        boolean completeFailure(Instant end, String message) {
+            if (!completed.compareAndSet(false, true)) {
+                return false;
+            }
+            List<AiTraceEventEntity> eventsSnapshot;
+            List<AiTraceSttEntity> sttSnapshot;
+            List<AiTraceTtsEntity> ttsSnapshot;
+            List<AiTraceErrorEntity> errorsSnapshot;
+            AiTraceLlmEntity llmSnapshot;
+            synchronized (monitor) {
+                events.add(newEvent("orchestrator", "turn_failed", "Turn failed", end,
+                        durationMillis(turnStart, end), buildFailureMetadata(message)));
+                eventsSnapshot = new ArrayList<>(events);
+                sttSnapshot = new ArrayList<>(sttSegments);
+                ttsSnapshot = new ArrayList<>(ttsSegments);
+                errorsSnapshot = new ArrayList<>(errors);
+                llmSnapshot = llmRecord;
+            }
+            AiTraceSessionEntity session = sessionContext.sessionSnapshot;
+            session.setRoundIndex(roundIndex);
+            session.setStatus("failed");
+            session.setErrorMessage(message);
+            session.setEndTime(toDateTime(end));
+            if (sessionContext.sessionStartInstant != null) {
+                session.setDurationMs(durationMillis(sessionContext.sessionStartInstant, end));
+            }
+            sessionContext.sessionFailed = true;
+            persist(session, eventsSnapshot, sttSnapshot, llmSnapshot, ttsSnapshot, errorsSnapshot);
+            return true;
+        }
+
+        private void persist(AiTraceSessionEntity session,
+                             List<AiTraceEventEntity> eventsSnapshot,
+                             List<AiTraceSttEntity> sttSnapshot,
+                             AiTraceLlmEntity llmSnapshot,
+                             List<AiTraceTtsEntity> ttsSnapshot,
+                             List<AiTraceErrorEntity> errorsSnapshot) {
+            try {
+                traceRecordService.persistRound(session, eventsSnapshot, sttSnapshot, llmSnapshot, ttsSnapshot, errorsSnapshot);
+            } catch (RuntimeException ex) {
+                traceLog.error("Failed to persist trace round for traceId={} round={}", traceId, roundIndex, ex);
+                throw ex;
+            }
+        }
+
+        private AiTraceEventEntity recordEvent(String phase,
+                                               String eventName,
+                                               String message,
+                                               Instant timestamp,
+                                               Long duration,
+                                               Map<String, Object> metadata) {
+            AiTraceEventEntity event = newEvent(phase, eventName, message, timestamp, duration, metadata);
+            synchronized (monitor) {
+                events.add(event);
+            }
+            return event;
+        }
+
+        private AiTraceEventEntity newEvent(String phase,
+                                            String eventName,
+                                            String message,
+                                            Instant timestamp,
+                                            Long duration,
+                                            Map<String, Object> metadata) {
+            AiTraceEventEntity event = new AiTraceEventEntity()
+                    .setPhase(phase)
+                    .setEventName(eventName)
+                    .setMessage(message)
+                    .setMetadata(toJson(metadata))
+                    .setTimestamp(toDateTime(timestamp))
+                    .setDurationMs(duration);
+            return event;
+        }
+
+        private Map<String, Object> buildCompletionMetadata(boolean failed) {
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("assistantTextLength", assistantResponse == null ? 0 : assistantResponse.length());
+            metadata.put("failed", failed);
+            if (StringUtils.hasText(finalUserText)) {
+                metadata.put("userTextLength", finalUserText.length());
+            }
+            return metadata;
+        }
+
+        private Map<String, Object> buildFailureMetadata(String message) {
+            Map<String, Object> metadata = buildCompletionMetadata(true);
+            if (StringUtils.hasText(message)) {
+                metadata.put("message", message);
+            }
+            return metadata;
+        }
+
+        private Map<String, Object> buildLlmRequestParams() {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("historySize", promptHistory.size());
+            params.put("sttProvider", sttProvider);
+            params.put("inputSampleRate", inputFormat.sampleRate());
+            params.put("inputChannels", inputFormat.channels());
+            params.put("inputBitDepth", inputFormat.bitDepth());
+            return params;
+        }
+
+        private Map<String, Object> buildTtsParams(boolean fallback) {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("voice", ttsProperties.voice());
+            params.put("fallback", fallback);
+            params.put("targetSampleRate", fallback ? blockingTtsClient.outputFormat().sampleRate() : ttsProperties.getSampleRate());
+            params.put("targetChannels", fallback ? blockingTtsClient.outputFormat().channels() : ttsProperties.getChannels());
+            params.put("targetBitDepth", fallback ? blockingTtsClient.outputFormat().bitDepth() : ttsProperties.getBitDepth());
+            return params;
+        }
+
+        private Map<String, Object> buildTtsResponseMetadata(boolean fallback, int chunkCount) {
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("chunks", chunkCount);
+            metadata.put("fallback", fallback);
+            return metadata;
+        }
+
+        private String resolveTtsFormat(boolean fallback) {
+            if (!fallback) {
+                return ttsProperties.getFormat();
+            }
+            AudioFormat format = blockingTtsClient.outputFormat();
+            return String.format(Locale.ROOT, "pcm-%d", format.bitDepth());
+        }
+
+        private String resolveModelName(Map<String, Object> metadata) {
+            if (metadata == null) {
+                return null;
+            }
+            Object model = metadata.get("model");
+            return model instanceof String ? (String) model : null;
+        }
+
+        private String resolveFinishReason(Map<String, Object> metadata) {
+            if (metadata == null) {
+                return null;
+            }
+            Object finish = metadata.get("finish_reason");
+            if (finish instanceof String finishStr && StringUtils.hasText(finishStr)) {
+                return finishStr;
+            }
+            Object doneReason = metadata.get("done_reason");
+            return doneReason instanceof String ? (String) doneReason : null;
+        }
+
+        private Integer extractUsageToken(Map<String, Object> metadata, String key) {
+            if (metadata == null) {
+                return null;
+            }
+            Object usage = metadata.get("usage");
+            if (usage instanceof Map<?, ?> usageMap) {
+                Object value = usageMap.get(key);
+                if (value instanceof Number number) {
+                    return number.intValue();
+                }
+            }
+            return null;
+        }
+
+        private LocalDateTime toDateTime(Instant instant) {
+            if (instant == null) {
+                return null;
+            }
+            return LocalDateTime.ofInstant(instant, traceZoneId);
+        }
+
+        private Long durationMillis(Instant start, Instant end) {
+            if (start == null || end == null) {
+                return null;
+            }
+            return Duration.between(start, end).toMillis();
+        }
+
+        private String toJson(Object value) {
+            if (value == null) {
+                return null;
+            }
+            try {
+                return mapper.writeValueAsString(value);
+            } catch (JsonProcessingException ex) {
+                traceLog.warn("Failed to serialize metadata for traceId={} round={}", traceId, roundIndex, ex);
+                return null;
+            }
+        }
+
+        private String stackTraceOf(Throwable throwable) {
+            if (throwable == null) {
+                return null;
+            }
+            StringWriter writer = new StringWriter();
+            throwable.printStackTrace(new PrintWriter(writer));
+            return writer.toString();
         }
     }
 }

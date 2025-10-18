@@ -59,6 +59,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * WebSocket 端流式对话处理器：统筹语音输入、语言模型应答与语音合成输出。
+ * <p>
+ * 所有关键节点均打印中文日志，便于生产环境排查；同时补充中文注释帮助阅读。
+ */
 @Component
 public class StreamingConversationHandler extends TextWebSocketHandler {
 
@@ -81,6 +86,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final Map<String, SessionContext> sessions = new ConcurrentHashMap<>();
 
+    /**
+     * 构造函数：收集可用的 STT 客户端，同时注入 LLM/TTS 与追踪服务。
+     */
     public StreamingConversationHandler(ObjectMapper mapper,
                                         Map<String, StreamingSpeechToTextClient> sttClients,
                                         StreamingLanguageModelClient llmClient,
@@ -92,6 +100,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         Objects.requireNonNull(sttClients, "sttClients");
         Map<String, StreamingSpeechToTextClient> clientMap = new LinkedHashMap<>();
         Map<String, String> displayNames = new LinkedHashMap<>();
+        // 遍历 Spring Bean，提取唯一标识，构建可用 STT 映射表
         sttClients.forEach((beanName, client) -> {
             String id = extractProviderId(beanName, client);
             if (!StringUtils.hasText(id)) {
@@ -119,9 +128,16 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         this.traceRecordService = Objects.requireNonNull(traceRecordService, "traceRecordService");
         this.streamingTtsEngineName = determineEngineName(streamingTtsClient);
         this.blockingTtsEngineName = determineEngineName(blockingTtsClient);
-        log.debug("【流式会话】初始化完成，STT 服务数量：{}，默认 STT：{}", this.sttClients.size(), this.defaultSttProvider);
+        log.info("【流式会话】初始化完成，STT 服务数量：{}，默认 STT：{}，流式TTS={}，阻塞TTS={}",
+                this.sttClients.size(),
+                this.defaultSttProvider,
+                this.streamingTtsEngineName,
+                this.blockingTtsEngineName);
     }
 
+    /**
+     * Bean 销毁前释放线程池与会话资源，避免资源泄露。
+     */
     @PreDestroy
     public void shutdown() {
         log.info("【流式会话】开始释放资源，准备关闭线程池");
@@ -131,6 +147,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         log.info("【流式会话】资源释放完成");
     }
 
+    /**
+     * 新连接建立时初始化 SessionContext，并告知前端可用 STT 服务。
+     */
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         SessionContext context = new SessionContext(defaultSttProvider);
@@ -150,16 +169,23 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         log.debug("【流式会话】WebSocket 会话建立成功，ID={}", session.getId());
     }
 
+    /**
+     * 连接关闭后清理上下文，同时尝试对会话做一次追踪落库。
+     */
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         SessionContext ctx = sessions.remove(session.getId());
         if (ctx != null) {
             ctx.dispose();
             finalizeSession(ctx);
+            log.info("【流式会话】完成会话清理，traceId={}", ctx.traceId);
         }
         log.debug("【流式会话】WebSocket 会话关闭，ID={}，状态码={}", session.getId(), status.getCode());
     }
 
+    /**
+     * WebSocket 文本消息入口，解析消息类型并路由到对应处理器。
+     */
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
         log.trace("【流式会话】收到文本消息，长度：{}", message.getPayloadLength());
@@ -179,6 +205,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         }
     }
 
+    /**
+     * 处理客户端发起的 start 指令：准备上下文、挑选 STT，并通知前端进入录音状态。
+     */
     private void handleStart(WebSocketSession session, SessionContext ctx, JsonNode node) throws IOException {
         log.debug("【流式会话】开始新的会话轮次，session={}", session.getId());
         if (ctx.turnActive.get()) {
@@ -188,7 +217,10 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         }
         ctx.resetTurn();
         ctx.inputFormat = parseAudioFormat(node);
+        log.debug("【流式会话】解析客户端音频参数：sampleRate={}Hz, channels={}, bitDepth={}",
+                ctx.inputFormat.sampleRate(), ctx.inputFormat.channels(), ctx.inputFormat.bitDepth());
         node.path("history").forEach(item -> parseConversationMessage(item).ifPresent(ctx.history::add));
+        log.debug("【流式会话】载入客户端历史消息，共 {} 条", ctx.history.size());
         String requestedProvider = node.path("sttProvider").asText("");
         String provider = resolveSttProvider(requestedProvider);
         if (provider == null) {
@@ -205,6 +237,8 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         }
         ctx.sttProvider = provider;
         ctx.beginTraceRound(node, provider);
+        int traceRoundIndex = ctx.traceContext != null ? ctx.traceContext.roundIndex : -1;
+        log.info("【流式会话】开始新一轮追踪，traceId={}，roundIndex={}", ctx.traceId, traceRoundIndex);
         ctx.turnActive.set(true);
         ctx.capturing.set(true);
         log.info("【流式会话】已选择 STT 服务：{}", ctx.sttProvider);
@@ -215,6 +249,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         startStreamingStt(session, ctx);
     }
 
+    /**
+     * 实时写入音频片段，提供给后台 STT 流式识别。
+     */
     private void handleAudio(SessionContext ctx, JsonNode node) {
         if (!ctx.capturing.get()) {
             log.trace("【流式会话】忽略音频片段：当前未处于采集状态");
@@ -233,12 +270,16 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         }
         try {
             output.write(bytes);
+            log.trace("【流式会话】写入音频片段成功，长度={} 字节", bytes.length);
         } catch (IOException ex) {
             log.warn("【流式会话】写入音频片段失败", ex);
             ctx.capturing.set(false);
         }
     }
 
+    /**
+     * 结束音频采集，并在短暂延迟后触发转写收尾逻辑。
+     */
     private void handleStop(WebSocketSession session, SessionContext ctx) {
         if (!ctx.capturing.compareAndSet(true, false)) {
             log.trace("【流式会话】收到 stop 指令但当前未采集音频");
@@ -250,6 +291,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         } catch (IOException ignored) {
         }
         ctx.audioOutput = null;
+        log.debug("【流式会话】客户端触发 stop，traceId={}，等待转写收尾", ctx.traceId);
         // STT callback will handle final transcript
         executor.execute(() -> {
             try {
@@ -260,6 +302,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         });
     }
 
+    /**
+     * 启动流式语音识别，将音频管道交由 STT 客户端消费。
+     */
     private void startStreamingStt(WebSocketSession session, SessionContext ctx) throws IOException {
         StreamingSpeechToTextClient sttClient = sttClients.get(ctx.sttProvider);
         if (sttClient == null) {
@@ -277,6 +322,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             return;
         }
         ctx.initAudioPipe();
+        log.debug("【流式会话】音频管道初始化完成，traceId={}", ctx.traceId);
         ctx.asrStartMs = System.currentTimeMillis();
         if (ctx.traceContext != null) {
             ctx.traceContext.recordSttStreamStart(Instant.ofEpochMilli(ctx.asrStartMs));
@@ -312,6 +358,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         });
     }
 
+    /**
+     * 接收 STT 回调的增量或最终结果，并回推转写文本。
+     */
     private void handleSttResult(WebSocketSession session, SessionContext ctx, SttResult result) {
         String text = result.getText() == null ? "" : result.getText().trim();
         if (ctx.traceContext != null) {
@@ -323,6 +372,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             msg.put("text", text);
             msg.put("final", result.isFinished());
             sendSafely(session, msg);
+            log.debug("【流式会话】收到 STT 转写，final={}，长度={}，traceId={}", result.isFinished(), text.length(), ctx.traceId);
         }
         if (result.isFinished()) {
             long end = System.currentTimeMillis();
@@ -334,14 +384,19 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                 extra.put("text", text);
             }
             sendDebug(session, "asr", "complete", "ASR streaming finished", ctx.asrStartMs, end, extra);
+            log.info("【流式会话】STT 最终结果确定，长度={}，traceId={}", text.length(), ctx.traceId);
             finalizeTranscript(session, ctx);
         }
     }
 
+    /**
+     * 在语音输入结束后收尾：若有有效文本则进入 LLM 链条，否则返回无语音事件。
+     */
     private void finalizeTranscript(WebSocketSession session, SessionContext ctx) {
         if (!ctx.processing.compareAndSet(false, true)) {
             return;
         }
+        log.debug("【流式会话】进入转写收尾阶段，traceId={}", ctx.traceId);
         ctx.capturing.set(false);
         ctx.closeAudioInput();
         String userText = ctx.consumeTranscript();
@@ -353,11 +408,13 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                     ctx.traceContext = null;
                 }
             }
+            log.info("【流式会话】未检测到有效语音输入，traceId={}", ctx.traceId);
             sendSafely(session, event("no_speech"));
             ctx.turnActive.set(false);
             ctx.processing.set(false);
             return;
         }
+        log.info("【流式会话】本轮识别完成，用户文本长度={}，traceId={}", userText.length(), ctx.traceId);
         Instant transcriptTime = Instant.now();
         if (ctx.traceContext != null) {
             ctx.traceContext.recordUserMessage(userText, transcriptTime);
@@ -366,11 +423,15 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         streamAssistant(session, ctx, userText);
     }
 
+    /**
+     * 触发 LLM 与 TTS 流水线，持续向前端推送模型回复与语音。
+     */
     private void streamAssistant(WebSocketSession session, SessionContext ctx, String userText) {
         executor.execute(() -> {
             StringBuilder accumulated = new StringBuilder();
             StringBuilder pendingSentence = new StringBuilder();
             ctx.llmStartMs = System.currentTimeMillis();
+            log.info("【流式会话】开始进入 LLM 流程，历史消息数={}，traceId={}", ctx.history.size(), ctx.traceId);
             ObjectNode llmStartExtra = mapper.createObjectNode();
             llmStartExtra.put("historySize", ctx.history.size());
             llmStartExtra.put("userTextLength", userText.length());
@@ -397,6 +458,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                         ctx.history.add(new ConversationMessage(ConversationRole.ASSISTANT, finalText));
                     }
                     long llmEnd = System.currentTimeMillis();
+                    log.info("【流式会话】LLM 推理结束，回复长度={}，traceId={}", finalText.length(), ctx.traceId);
                     ObjectNode llmExtra = mapper.createObjectNode();
                     llmExtra.put("finalTextLength", finalText.length());
                     llmExtra.put("responseText", finalText);
@@ -461,29 +523,44 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         });
     }
 
+    /**
+     * 按句号边界拆分 LLM 增量结果，并即时触发 TTS。
+     */
     private void emitSentences(WebSocketSession session, SessionContext ctx, StringBuilder buffer) {
         int idx;
         while ((idx = findSentenceBoundary(buffer)) != -1) {
             String sentence = buffer.substring(0, idx + 1).trim();
             buffer.delete(0, idx + 1);
             if (!sentence.isEmpty()) {
+                log.debug("【流式会话】检测到完整句子，准备合成：{}", sentence);
                 enqueueTts(session, ctx, sentence);
             }
         }
     }
 
+    /**
+     * 将剩余未发送的文本作为最后一句补齐。
+     */
     private void emitResidualSentence(WebSocketSession session, SessionContext ctx, StringBuilder buffer) {
         String leftover = buffer.toString().trim();
         buffer.setLength(0);
         if (!leftover.isEmpty()) {
+            log.debug("【流式会话】补充残余句子进行合成：{}", leftover);
             enqueueTts(session, ctx, leftover);
         }
     }
 
+    /**
+     * 通过串行的 CompletableFuture 保证 TTS 语音顺序输出。
+     */
     private void enqueueTts(WebSocketSession session, SessionContext ctx, String sentence) {
         ctx.ttsChain = ctx.ttsChain.thenRunAsync(() -> streamSentenceTts(session, ctx, sentence), executor);
+        log.trace("【流式会话】句子已加入 TTS 队列，当前队列索引={}", ctx.ttsIndex.get());
     }
 
+    /**
+     * 对单句文本执行流式 TTS；若失败则自动回退到阻塞式方案。
+     */
     private void streamSentenceTts(WebSocketSession session, SessionContext ctx, String sentence) {
         AtomicBoolean delivered = new AtomicBoolean(false);
         AtomicInteger chunkCount = new AtomicInteger();
@@ -500,6 +577,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         startExtra.put("text", sentence);
         startExtra.put("textPreview", sentence.length() > 160 ? sentence.substring(0, 160) : sentence);
         sendDebug(session, "tts", "start", "Streaming TTS sentence", start, null, startExtra);
+        log.debug("【流式会话】开始流式合成句子，index={}，traceId={}", sentenceIndex, ctx.traceId);
         if (ctx.traceContext != null) {
             ctx.traceContext.recordTtsSentenceStart(sentenceIndex, sentence, segmentStart);
         }
@@ -537,7 +615,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             try {
                 byte[] audio = blockingTtsClient.synthesize(sentence, null);
                 if (audio != null && audio.length > 0) {
-                    log.debug("【流式会话】已使用阻塞式 TTS 回退，文本：{}", sentence);
+                    log.info("【流式会话】执行阻塞式 TTS 回退，index={}，字节数={}，traceId={}", sentenceIndex, audio.length, ctx.traceId);
                     chunkAndSendAudio(session, audio);
                     long fallbackEnd = System.currentTimeMillis();
                     fallbackExtra.put("bytes", audio.length);
@@ -553,6 +631,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                 fallbackError.put("textLength", sentence.length());
                 fallbackError.put("message", ex.getMessage());
                 sendDebug(session, "tts", "fallback-error", "Fallback TTS failed", fallbackStart, System.currentTimeMillis(), fallbackError);
+                log.warn("【流式会话】阻塞式 TTS 回退失败，index={}，traceId={}", sentenceIndex, ctx.traceId, ex);
                 if (ctx.traceContext != null) {
                     Instant errorInstant = Instant.now();
                     ctx.traceContext.recordError("tts", "TTS_FALLBACK_ERROR", ex.getMessage(), ex, errorInstant);
@@ -573,9 +652,13 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                 ctx.traceContext.recordTtsSentenceComplete(sentenceIndex, sentence, segmentStart,
                         Instant.ofEpochMilli(end), false, chunkCount.get());
             }
+            log.info("【流式会话】流式 TTS 完成，index={}，分片数={}，traceId={}", sentenceIndex, chunkCount.get(), ctx.traceId);
         }
     }
 
+    /**
+     * 将音频分片编码为 Base64 后推送到前端。
+     */
     private void sendAudioChunk(WebSocketSession session, byte[] chunk) {
         ObjectNode node = event("tts_chunk");
         node.put("audioBase64", Base64.getEncoder().encodeToString(chunk));
@@ -584,6 +667,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         sendSafely(session, node);
     }
 
+    /**
+     * 按固定窗口切割阻塞式 TTS 的结果，模拟流式输出效果。
+     */
     private void chunkAndSendAudio(WebSocketSession session, byte[] audio) {
         AudioFormat format = blockingTtsClient.outputFormat();
         int bytesPerSample = Math.max(1, format.bitDepth() / 8);
@@ -607,6 +693,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         sendSafely(session, node);
     }
 
+    /**
+     * 构造调试事件并发往前端，用于可视化各阶段耗时与额外信息。
+     */
     private void sendDebug(WebSocketSession session,
                            String stage,
                            String status,
@@ -636,6 +725,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         sendSafely(session, node);
     }
 
+    /**
+     * 保护性发送消息，防止并发写导致的 IllegalStateException。
+     */
     private void sendSafely(WebSocketSession session, ObjectNode node) {
         if (session == null || !session.isOpen()) {
             return;
@@ -727,6 +819,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         return client == null ? "unknown" : client.getClass().getSimpleName();
     }
 
+    /**
+     * WebSocket 关闭时对会话级追踪做最终补齐（例如结束时间、耗时统计）。
+     */
     private void finalizeSession(SessionContext ctx) {
         if (ctx.sessionSnapshot == null) {
             return;
@@ -752,6 +847,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                     null,
                     Collections.emptyList(),
                     Collections.emptyList());
+            log.info("【流式会话】会话追踪已落库，traceId={}，状态={}，轮次={}", ctx.traceId, ctx.sessionSnapshot.getStatus(), ctx.sessionSnapshot.getRoundIndex());
         } catch (RuntimeException ex) {
             log.warn("【流式会话】关闭会话时更新会话状态失败，traceId={}", ctx.traceId, ex);
         }
@@ -807,6 +903,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         }
     }
 
+    /**
+     * 会话上下文：保存当前 WebSocket 连接的状态、音频管道以及追踪信息。
+     */
     private class SessionContext {
         private final String traceId = UUID.randomUUID().toString().replace("-", "");
         private final List<ConversationMessage> history = new ArrayList<>();
@@ -834,6 +933,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             this.sttProvider = defaultProvider;
         }
 
+        /**
+         * 重置轮次相关状态，确保新一轮处理从干净环境开始。
+         */
         void resetTurn() {
             transcriptBuffer.setLength(0);
             ttsChain = CompletableFuture.completedFuture(null);
@@ -844,11 +946,17 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             traceContext = null;
         }
 
+        /**
+         * 初始化音频输入输出管道，供 STT 客户端实时消费。
+         */
         void initAudioPipe() throws IOException {
             audioInput = new PipedInputStream(64 * 1024);
             audioOutput = new PipedOutputStream(audioInput);
         }
 
+        /**
+         * 主动关闭音频输入流，释放底层资源。
+         */
         void closeAudioInput() {
             try {
                 if (audioInput != null) {
@@ -859,6 +967,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             audioInput = null;
         }
 
+        /**
+         * 关闭所有资源并尝试标记本轮追踪失败。
+         */
         void dispose() {
             failActiveTrace("Session disposed before completion");
             closeAudioInput();
@@ -870,6 +981,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             }
         }
 
+        /**
+         * 记录最新的转写文本，供后续消费。
+         */
         void updateTranscript(String text, boolean isFinal) {
             transcriptBuffer.setLength(0);
             transcriptBuffer.append(text);
@@ -878,12 +992,18 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             }
         }
 
+        /**
+         * 取出当前累积文本并清空缓存。
+         */
         String consumeTranscript() {
             String value = transcriptBuffer.toString();
             transcriptBuffer.setLength(0);
             return value.trim();
         }
 
+        /**
+         * 启动一轮新的追踪上下文，并分配追踪 ID 与轮次信息。
+         */
         void beginTraceRound(JsonNode payload, String provider) {
 //            this.userId = payload.path("userId").canConvertToLong() ? payload.path("userId").longValue() : userId;
             this.userId = 1l;
@@ -894,8 +1014,12 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             ensureSessionSnapshot(now);
             int roundIndex = roundSequence.getAndIncrement();
             traceContext = new TurnTraceContext(this, provider, new ArrayList<>(history), now, roundIndex);
+            log.debug("【流式会话】追踪上下文已创建，traceId={}，roundIndex={}，history={}", traceId, roundIndex, history.size());
         }
 
+        /**
+         * 初始化或更新会话级快照，用于最终会话持久化。
+         */
         void ensureSessionSnapshot(Instant reference) {
             if (sessionSnapshot == null) {
                 sessionSnapshot = new AiTraceSessionEntity();
@@ -913,6 +1037,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             }
         }
 
+        /**
+         * 当轮次提前终止时，补记失败状态。
+         */
         void failActiveTrace(String message) {
             if (traceContext != null) {
                 if (traceContext.completeFailure(Instant.now(), message)) {
@@ -922,6 +1049,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         }
     }
 
+    /**
+     * 单轮追踪上下文：聚合事件、STT/LLM/TTS 片段，并在轮次结束时统一落库。
+     */
     private final class TurnTraceContext {
 
         private static final Logger traceLog = LoggerFactory.getLogger(TurnTraceContext.class);
@@ -968,6 +1098,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             recordEvent("orchestrator", "turn_start", "Streaming turn started", turnStart, null, metadata);
         }
 
+        /**
+         * STT 管道开启时打点记录输入参数。
+         */
         void recordSttStreamStart(Instant start) {
             this.sttStart = start;
             this.lastSttSegmentEnd = start;
@@ -979,6 +1112,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             recordEvent("stt", "start", "STT streaming started", start, null, metadata);
         }
 
+        /**
+         * 收集每个 STT 片段，含文本与耗时信息。
+         */
         void recordSttResult(SttResult result, String text, Instant timestamp) {
             Instant segmentStart = Optional.ofNullable(lastSttSegmentEnd).orElse(Optional.ofNullable(sttStart).orElse(timestamp));
             lastSttSegmentEnd = timestamp;
@@ -1017,10 +1153,16 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             }
         }
 
+        /**
+         * 在未检测到语音的情况下打点。
+         */
         void recordNoSpeech(Instant timestamp) {
             recordEvent("orchestrator", "no_speech", "No speech detected", timestamp, null, Map.of());
         }
 
+        /**
+         * 记录最终用户文本。
+         */
         void recordUserMessage(String text, Instant timestamp) {
             if (StringUtils.hasText(text)) {
                 this.finalUserText = text.trim();
@@ -1031,6 +1173,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             recordEvent("orchestrator", "user_text", "User text finalized", timestamp, durationMillis(turnStart, timestamp), metadata);
         }
 
+        /**
+         * LLM 开始推理时记录 prompt 信息。
+         */
         void recordLlmStart(List<ConversationMessage> prompt, Instant start) {
             this.llmStart = start;
             this.promptHistory.clear();
@@ -1041,6 +1186,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             recordEvent("llm", "start", "LLM streaming started", start, null, metadata);
         }
 
+        /**
+         * LLM 完成时写入响应文本与 token 用量。
+         */
         void recordLlmCompletion(String response, Map<String, Object> metadata, Instant end) {
             this.assistantResponse = response;
             this.llmMetadata = metadata == null ? Collections.emptyMap() : new LinkedHashMap<>(metadata);
@@ -1066,6 +1214,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             recordEvent("llm", "complete", "LLM streaming completed", end, durationMillis(llmStart, end), extra);
         }
 
+        /**
+         * 将助手输出写入事件流。
+         */
         void recordAssistantMessage(String text, Instant timestamp) {
             if (StringUtils.hasText(text)) {
                 this.assistantResponse = text;
@@ -1077,6 +1228,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                     durationMillis(llmStart, timestamp), metadata);
         }
 
+        /**
+         * 每句合成开始时记录索引与文本长度，便于后续定位问题。
+         */
         void recordTtsSentenceStart(int index, String sentence, Instant start) {
             Map<String, Object> metadata = new LinkedHashMap<>();
             metadata.put("index", index);
@@ -1084,6 +1238,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             recordEvent("tts", "sentence_start", "TTS sentence synthesis started", start, null, metadata);
         }
 
+        /**
+         * 合成结束时写入 TTS 片段明细（含回退信息）。
+         */
         void recordTtsSentenceComplete(int index,
                                        String sentence,
                                        Instant start,
@@ -1114,6 +1271,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             recordEvent("tts", "sentence_complete", "TTS sentence synthesis completed", end, durationMillis(start, end), metadata);
         }
 
+        /**
+         * 统一记录异常事件并保存堆栈。
+         */
         void recordError(String phase, String code, String message, Throwable throwable, Instant occur) {
             AiTraceErrorEntity entity = new AiTraceErrorEntity()
                     .setPhase(phase)
@@ -1132,6 +1292,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             recordEvent(phase, "error", "Error occurred", occur, null, metadata);
         }
 
+        /**
+         * 链路成功结束时落库。
+         */
         boolean completeSuccess(Instant end) {
             if (!completed.compareAndSet(false, true)) {
                 return false;
@@ -1171,6 +1334,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             return true;
         }
 
+        /**
+         * 链路失败时落库并写入错误信息。
+         */
         boolean completeFailure(Instant end, String message) {
             if (!completed.compareAndSet(false, true)) {
                 return false;
@@ -1202,6 +1368,9 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             return true;
         }
 
+        /**
+         * 通过 TraceRecordService 将单轮完整数据写入数据库。
+         */
         private void persist(AiTraceSessionEntity session,
                              List<AiTraceEventEntity> eventsSnapshot,
                              List<AiTraceSttEntity> sttSnapshot,

@@ -1,5 +1,8 @@
 package com.halliday.ai.tts.config;
 
+import lombok.Getter;
+import lombok.Setter;
+import lombok.experimental.Accessors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -7,6 +10,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * Kokoro TTS 服务配置项。
  */
+@Getter
+@Setter
+@Accessors(fluent = true)
 @ConfigurationProperties(prefix = "ai.tts")
 public class KokoroTtsProperties {
 
@@ -58,92 +64,101 @@ public class KokoroTtsProperties {
     private String wsUrl;
 
     public String getUrl() {
-        log.debug("【Kokoro 配置】读取 url：{}", url);
-        return url;
+        String value = url();
+        log.debug("【Kokoro 配置】读取 url：{}", value);
+        return value;
     }
 
     public void setUrl(String url) {
         log.debug("【Kokoro 配置】设置 url：{}", url);
-        this.url = url;
+        url(url);
     }
 
     public String getVoice() {
-        log.debug("【Kokoro 配置】读取 voice：{}", voice);
-        return voice;
+        String value = voice();
+        log.debug("【Kokoro 配置】读取 voice：{}", value);
+        return value;
     }
 
     public void setVoice(String voice) {
         log.debug("【Kokoro 配置】设置 voice：{}", voice);
-        this.voice = voice;
+        voice(voice);
     }
 
     public String getFormat() {
-        log.debug("【Kokoro 配置】读取 format：{}", format);
-        return format;
+        String value = format();
+        log.debug("【Kokoro 配置】读取 format：{}", value);
+        return value;
     }
 
     public void setFormat(String format) {
         log.debug("【Kokoro 配置】设置 format：{}", format);
-        this.format = format;
+        format(format);
     }
 
     public int getSampleRate() {
-        log.debug("【Kokoro 配置】读取 sampleRate：{}", sampleRate);
-        return sampleRate;
+        int value = sampleRate();
+        log.debug("【Kokoro 配置】读取 sampleRate：{}", value);
+        return value;
     }
 
     public void setSampleRate(int sampleRate) {
         log.debug("【Kokoro 配置】设置 sampleRate：{}", sampleRate);
-        this.sampleRate = sampleRate;
+        sampleRate(sampleRate);
     }
 
     public int getChannels() {
-        log.debug("【Kokoro 配置】读取 channels：{}", channels);
-        return channels;
+        int value = channels();
+        log.debug("【Kokoro 配置】读取 channels：{}", value);
+        return value;
     }
 
     public void setChannels(int channels) {
         log.debug("【Kokoro 配置】设置 channels：{}", channels);
-        this.channels = channels;
+        channels(channels);
     }
 
     public int getBitDepth() {
-        log.debug("【Kokoro 配置】读取 bitDepth：{}", bitDepth);
-        return bitDepth;
+        int value = bitDepth();
+        log.debug("【Kokoro 配置】读取 bitDepth：{}", value);
+        return value;
     }
 
     public void setBitDepth(int bitDepth) {
         log.debug("【Kokoro 配置】设置 bitDepth：{}", bitDepth);
-        this.bitDepth = bitDepth;
+        bitDepth(bitDepth);
     }
 
     public long getConnectTimeoutMs() {
-        log.debug("【Kokoro 配置】读取 connectTimeoutMs：{}", connectTimeoutMs);
-        return connectTimeoutMs;
+        long value = connectTimeoutMs();
+        log.debug("【Kokoro 配置】读取 connectTimeoutMs：{}", value);
+        return value;
     }
 
     public void setConnectTimeoutMs(long connectTimeoutMs) {
         log.debug("【Kokoro 配置】设置 connectTimeoutMs：{}", connectTimeoutMs);
-        this.connectTimeoutMs = connectTimeoutMs;
+        connectTimeoutMs(connectTimeoutMs);
     }
 
     public long getReadTimeoutMs() {
-        log.debug("【Kokoro 配置】读取 readTimeoutMs：{}", readTimeoutMs);
-        return readTimeoutMs;
+        long value = readTimeoutMs();
+        log.debug("【Kokoro 配置】读取 readTimeoutMs：{}", value);
+        return value;
     }
 
     public void setReadTimeoutMs(long readTimeoutMs) {
         log.debug("【Kokoro 配置】设置 readTimeoutMs：{}", readTimeoutMs);
-        this.readTimeoutMs = readTimeoutMs;
+        readTimeoutMs(readTimeoutMs);
     }
 
     public String getWsUrl() {
-        log.debug("【Kokoro 配置】读取 wsUrl：{}", wsUrl);
-        return wsUrl;
+        String value = wsUrl();
+        log.debug("【Kokoro 配置】读取 wsUrl：{}", value);
+        return value;
     }
 
     public void setWsUrl(String wsUrl) {
         log.debug("【Kokoro 配置】设置 wsUrl：{}", wsUrl);
-        this.wsUrl = wsUrl;
+        wsUrl(wsUrl);
     }
 }

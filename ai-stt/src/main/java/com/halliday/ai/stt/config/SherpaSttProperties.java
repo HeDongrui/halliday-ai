@@ -1,5 +1,8 @@
 package com.halliday.ai.stt.config;
 
+import lombok.Getter;
+import lombok.Setter;
+import lombok.experimental.Accessors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -7,6 +10,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * Sherpa WebSocket ASR 服务的配置项。
  */
+@Getter
+@Setter
+@Accessors(fluent = true)
 @ConfigurationProperties(prefix = "ai.stt")
 public class SherpaSttProperties {
 
@@ -38,52 +44,57 @@ public class SherpaSttProperties {
     private long resultTimeoutMs = 5_000;
 
     public String getWsUrl() {
-        log.debug("【Sherpa 配置】读取 wsUrl：{}", wsUrl);
-        return wsUrl;
+        String value = wsUrl();
+        log.debug("【Sherpa 配置】读取 wsUrl：{}", value);
+        return value;
     }
 
     public void setWsUrl(String wsUrl) {
         log.debug("【Sherpa 配置】设置 wsUrl：{}", wsUrl);
-        this.wsUrl = wsUrl;
+        wsUrl(wsUrl);
     }
 
     public int getFrameBytes() {
-        log.debug("【Sherpa 配置】读取 frameBytes：{}", frameBytes);
-        return frameBytes;
+        int value = frameBytes();
+        log.debug("【Sherpa 配置】读取 frameBytes：{}", value);
+        return value;
     }
 
     public void setFrameBytes(int frameBytes) {
         log.debug("【Sherpa 配置】设置 frameBytes：{}", frameBytes);
-        this.frameBytes = frameBytes;
+        frameBytes(frameBytes);
     }
 
     public long getConnectTimeoutMs() {
-        log.debug("【Sherpa 配置】读取 connectTimeoutMs：{}", connectTimeoutMs);
-        return connectTimeoutMs;
+        long value = connectTimeoutMs();
+        log.debug("【Sherpa 配置】读取 connectTimeoutMs：{}", value);
+        return value;
     }
 
     public void setConnectTimeoutMs(long connectTimeoutMs) {
         log.debug("【Sherpa 配置】设置 connectTimeoutMs：{}", connectTimeoutMs);
-        this.connectTimeoutMs = connectTimeoutMs;
+        connectTimeoutMs(connectTimeoutMs);
     }
 
     public long getReadTimeoutMs() {
-        log.debug("【Sherpa 配置】读取 readTimeoutMs：{}", readTimeoutMs);
-        return readTimeoutMs;
+        long value = readTimeoutMs();
+        log.debug("【Sherpa 配置】读取 readTimeoutMs：{}", value);
+        return value;
     }
 
     public void setReadTimeoutMs(long readTimeoutMs) {
         log.debug("【Sherpa 配置】设置 readTimeoutMs：{}", readTimeoutMs);
-        this.readTimeoutMs = readTimeoutMs;
+        readTimeoutMs(readTimeoutMs);
     }
 
     public long getResultTimeoutMs() {
-        log.debug("【Sherpa 配置】读取 resultTimeoutMs：{}", resultTimeoutMs);
-        return resultTimeoutMs;
+        long value = resultTimeoutMs();
+        log.debug("【Sherpa 配置】读取 resultTimeoutMs：{}", value);
+        return value;
     }
 
     public void setResultTimeoutMs(long resultTimeoutMs) {
         log.debug("【Sherpa 配置】设置 resultTimeoutMs：{}", resultTimeoutMs);
-        this.resultTimeoutMs = resultTimeoutMs;
+        resultTimeoutMs(resultTimeoutMs);
     }
 }

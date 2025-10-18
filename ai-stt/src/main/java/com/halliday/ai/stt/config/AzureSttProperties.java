@@ -1,5 +1,8 @@
 package com.halliday.ai.stt.config;
 
+import lombok.Getter;
+import lombok.Setter;
+import lombok.experimental.Accessors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -7,6 +10,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * Azure Speech-to-Text streaming configuration.
  */
+@Getter
+@Setter
+@Accessors(fluent = true)
 @ConfigurationProperties(prefix = "ai.stt.azure")
 public class AzureSttProperties {
 
@@ -63,111 +69,125 @@ public class AzureSttProperties {
     private long operationTimeoutMs = 10_000;
 
     public boolean isEnabled() {
-        log.debug("【Azure 配置】读取 enabled：{}", enabled);
-        return enabled;
+        boolean value = enabled();
+        log.debug("【Azure 配置】读取 enabled：{}", value);
+        return value;
     }
 
     public void setEnabled(boolean enabled) {
         log.debug("【Azure 配置】设置 enabled：{}", enabled);
-        this.enabled = enabled;
+        enabled(enabled);
     }
 
     public String getSubscriptionKey() {
-        log.debug("【Azure 配置】读取 subscriptionKey 是否为空：{}", subscriptionKey == null || subscriptionKey.isBlank());
-        return subscriptionKey;
+        String value = subscriptionKey();
+        log.debug("【Azure 配置】读取 subscriptionKey 是否为空：{}", value == null || value.isBlank());
+        return value;
     }
 
     public void setSubscriptionKey(String subscriptionKey) {
         log.debug("【Azure 配置】设置 subscriptionKey 是否为空：{}", subscriptionKey == null || subscriptionKey.isBlank());
-        this.subscriptionKey = subscriptionKey;
+        subscriptionKey(subscriptionKey);
     }
 
     public String getRegion() {
-        log.debug("【Azure 配置】读取 region：{}", region);
-        return region;
+        String value = region();
+        log.debug("【Azure 配置】读取 region：{}", value);
+        return value;
     }
 
     public void setRegion(String region) {
         log.debug("【Azure 配置】设置 region：{}", region);
-        this.region = region;
+        region(region);
     }
 
     public String getEndpoint() {
-        log.debug("【Azure 配置】读取 endpoint：{}", endpoint);
-        return endpoint;
+        String value = endpoint();
+        log.debug("【Azure 配置】读取 endpoint：{}", value);
+        return value;
     }
 
     public void setEndpoint(String endpoint) {
         log.debug("【Azure 配置】设置 endpoint：{}", endpoint);
-        this.endpoint = endpoint;
+        endpoint(endpoint);
     }
 
     public String getLanguage() {
-        log.debug("【Azure 配置】读取 language：{}", language);
-        return language;
+        String value = language();
+        log.debug("【Azure 配置】读取 language：{}", value);
+        return value;
     }
 
     public void setLanguage(String language) {
         log.debug("【Azure 配置】设置 language：{}", language);
-        this.language = language;
+        language(language);
     }
 
     public int getSampleRate() {
-        log.debug("【Azure 配置】读取 sampleRate：{}", sampleRate);
-        return sampleRate;
+        int value = sampleRate();
+        log.debug("【Azure 配置】读取 sampleRate：{}", value);
+        return value;
     }
 
     public void setSampleRate(int sampleRate) {
         log.debug("【Azure 配置】设置 sampleRate：{}", sampleRate);
-        this.sampleRate = sampleRate;
+        sampleRate(sampleRate);
     }
 
     public int getChannels() {
-        log.debug("【Azure 配置】读取 channels：{}", channels);
-        return channels;
+        int value = channels();
+        log.debug("【Azure 配置】读取 channels：{}", value);
+        return value;
     }
 
     public void setChannels(int channels) {
         log.debug("【Azure 配置】设置 channels：{}", channels);
-        this.channels = channels;
+        channels(channels);
     }
 
     public int getBitDepth() {
-        log.debug("【Azure 配置】读取 bitDepth：{}", bitDepth);
-        return bitDepth;
+        int value = bitDepth();
+        log.debug("【Azure 配置】读取 bitDepth：{}", value);
+        return value;
     }
 
     public void setBitDepth(int bitDepth) {
         log.debug("【Azure 配置】设置 bitDepth：{}", bitDepth);
-        this.bitDepth = bitDepth;
+        bitDepth(bitDepth);
     }
 
     public int getReadBufferSize() {
-        log.debug("【Azure 配置】读取 readBufferSize：{}", readBufferSize);
-        return readBufferSize;
+        int value = readBufferSize();
+        log.debug("【Azure 配置】读取 readBufferSize：{}", value);
+        return value;
     }
 
     public void setReadBufferSize(int readBufferSize) {
         log.debug("【Azure 配置】设置 readBufferSize：{}", readBufferSize);
-        this.readBufferSize = readBufferSize;
+        readBufferSize(readBufferSize);
     }
 
     public long getOperationTimeoutMs() {
-        log.debug("【Azure 配置】读取 operationTimeoutMs：{}", operationTimeoutMs);
-        return operationTimeoutMs;
+        long value = operationTimeoutMs();
+        log.debug("【Azure 配置】读取 operationTimeoutMs：{}", value);
+        return value;
     }
 
     public void setOperationTimeoutMs(long operationTimeoutMs) {
         log.debug("【Azure 配置】设置 operationTimeoutMs：{}", operationTimeoutMs);
-        this.operationTimeoutMs = operationTimeoutMs;
+        operationTimeoutMs(operationTimeoutMs);
     }
 
     /**
      * @return whether Azure STT has the minimum credentials to start.
      */
     public boolean hasCredentials() {
-        boolean available = subscriptionKey != null && !subscriptionKey.isBlank()
-                && ((endpoint != null && !endpoint.isBlank()) || (region != null && !region.isBlank()));
+        String key = subscriptionKey();
+        String endpointValue = endpoint();
+        String regionValue = region();
+        boolean available = key != null && !key.isBlank()
+                && ((endpointValue != null && !endpointValue.isBlank())
+                || (regionValue != null && !regionValue.isBlank()));
         log.debug("【Azure 配置】检测凭据是否完整：{}", available);
         return available;
     }

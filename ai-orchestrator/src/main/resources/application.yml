@@ -1,6 +1,9 @@
 server:
   port: 9099
 spring:
+  threads:
+    virtual:
+      enabled: true
   datasource:
     url: jdbc:mysql://localhost:3306/halliday_ai
     username: root

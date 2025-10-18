@@ -56,6 +56,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -83,7 +84,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
     private final String streamingTtsEngineName;
     private final String blockingTtsEngineName;
     private final ZoneId traceZoneId = ZoneOffset.UTC;
-    private final ExecutorService executor = Executors.newCachedThreadPool();
+    private final ExecutorService executor;
     private final Map<String, SessionContext> sessions = new ConcurrentHashMap<>();
 
     /**
@@ -128,6 +129,8 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         this.traceRecordService = Objects.requireNonNull(traceRecordService, "traceRecordService");
         this.streamingTtsEngineName = determineEngineName(streamingTtsClient);
         this.blockingTtsEngineName = determineEngineName(blockingTtsClient);
+        ThreadFactory virtualThreadFactory = Thread.ofVirtual().name("streaming-convo-", 0).factory();
+        this.executor = Executors.newThreadPerTaskExecutor(virtualThreadFactory);
         log.info("【流式会话】初始化完成，STT 服务数量：{}，默认 STT：{}，流式TTS={}，阻塞TTS={}",
                 this.sttClients.size(),
                 this.defaultSttProvider,

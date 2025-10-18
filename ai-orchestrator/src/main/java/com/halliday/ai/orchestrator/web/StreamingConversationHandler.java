@@ -885,7 +885,8 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         }
 
         void beginTraceRound(JsonNode payload, String provider) {
-            this.userId = payload.path("userId").canConvertToLong() ? payload.path("userId").longValue() : userId;
+//            this.userId = payload.path("userId").canConvertToLong() ? payload.path("userId").longValue() : userId;
+            this.userId = 1l;
             Instant now = Instant.now();
             if (sessionStartInstant == null) {
                 sessionStartInstant = now;
@@ -897,11 +898,12 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
 
         void ensureSessionSnapshot(Instant reference) {
             if (sessionSnapshot == null) {
-                sessionSnapshot = new AiTraceSessionEntity()
-                        .setTraceId(traceId)
-                        .setUserId(userId)
-                        .setStartTime(LocalDateTime.ofInstant(reference, traceZoneId))
-                        .setStatus("running");
+                sessionSnapshot = new AiTraceSessionEntity();
+
+                sessionSnapshot.setTraceId(traceId);
+                sessionSnapshot.setUserId(userId);
+                sessionSnapshot.setStartTime(LocalDateTime.ofInstant(reference, traceZoneId));
+                sessionSnapshot.setStatus("running");
             } else {
                 sessionSnapshot.setUserId(userId);
                 if (sessionSnapshot.getStartTime() == null && sessionStartInstant != null) {

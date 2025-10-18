@@ -11,6 +11,8 @@ import okhttp3.Response;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 import okio.ByteString;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.util.StringUtils;
 
 import java.nio.charset.StandardCharsets;
@@ -24,6 +26,8 @@ import java.util.function.Consumer;
 
 public class KokoroStreamingTextToSpeechClient implements StreamingTextToSpeechClient {
 
+    private static final Logger log = LoggerFactory.getLogger(KokoroStreamingTextToSpeechClient.class);
+
     private final KokoroTtsProperties properties;
     private final ObjectMapper mapper;
     private final OkHttpClient client;
@@ -31,6 +35,7 @@ public class KokoroStreamingTextToSpeechClient implements StreamingTextToSpeechC
     public KokoroStreamingTextToSpeechClient(KokoroTtsProperties properties, ObjectMapper mapper) {
         this.properties = Objects.requireNonNull(properties, "properties");
         this.mapper = Objects.requireNonNull(mapper, "mapper");
+        log.debug("【Kokoro 流式合成】初始化客户端，WebSocket 地址：{}", properties.getWsUrl());
         this.client = new OkHttpClient.Builder()
                 .connectTimeout(properties.getConnectTimeoutMs(), TimeUnit.MILLISECONDS)
                 .readTimeout(properties.getReadTimeoutMs(), TimeUnit.MILLISECONDS)
@@ -42,6 +47,7 @@ public class KokoroStreamingTextToSpeechClient implements StreamingTextToSpeechC
         Objects.requireNonNull(onChunk, "onChunk");
         Objects.requireNonNull(onComplete, "onComplete");
         if (!StringUtils.hasText(text)) {
+            log.error("【Kokoro 流式合成】输入文本为空，拒绝合成");
             throw new IllegalArgumentException("text must not be blank");
         }
 
@@ -53,6 +59,7 @@ public class KokoroStreamingTextToSpeechClient implements StreamingTextToSpeechC
         payload.put("response_format", properties.getFormat());
         payload.put("sample_rate", properties.getSampleRate());
         payload.put("stream", true);
+        log.debug("【Kokoro 流式合成】发送请求，文本长度：{}，目标音色：{}", text.length(), payload.get("voice"));
 
         CompletableFuture<Void> completion = new CompletableFuture<>();
         Request request = new Request.Builder().url(properties.getWsUrl()).build();
@@ -60,8 +67,10 @@ public class KokoroStreamingTextToSpeechClient implements StreamingTextToSpeechC
             @Override
             public void onOpen(WebSocket webSocket, Response response) {
                 try {
+                    log.debug("【Kokoro 流式合成】连接建立成功，发送初始化载荷");
                     webSocket.send(mapper.writeValueAsString(payload));
                 } catch (Exception ex) {
+                    log.error("【Kokoro 流式合成】发送初始化载荷失败", ex);
                     completion.completeExceptionally(ex);
                     webSocket.close(1011, "payload-error");
                 }
@@ -69,6 +78,7 @@ public class KokoroStreamingTextToSpeechClient implements StreamingTextToSpeechC
 
             @Override
             public void onMessage(WebSocket webSocket, String textMessage) {
+                log.trace("【Kokoro 流式合成】收到文本消息：{}", textMessage);
                 handleStringMessage(textMessage, onChunk, onComplete, completion, webSocket);
             }
 
@@ -78,23 +88,28 @@ public class KokoroStreamingTextToSpeechClient implements StreamingTextToSpeechC
                     return;
                 }
                 byte[] chunk = bytes.toByteArray();
+                log.trace("【Kokoro 流式合成】收到二进制音频片段，长度：{}", chunk.length);
                 onChunk.accept(chunk);
             }
 
             @Override
             public void onClosed(WebSocket webSocket, int code, String reason) {
+                log.debug("【Kokoro 流式合成】WebSocket 已关闭，code={}，reason={}", code, reason);
                 completion.complete(null);
             }
 
             @Override
             public void onFailure(WebSocket webSocket, Throwable t, Response response) {
+                log.error("【Kokoro 流式合成】WebSocket 发生异常", t);
                 completion.completeExceptionally(t);
             }
         });
 
         try {
             completion.orTimeout(properties.getReadTimeoutMs(), TimeUnit.MILLISECONDS).join();
+            log.info("【Kokoro 流式合成】流式合成流程完成");
         } catch (Exception ex) {
+            log.error("【Kokoro 流式合成】流式合成超时或失败", ex);
             ws.cancel();
             throw new AiServiceException("Streaming TTS timed out", ex);
         }
@@ -109,16 +124,17 @@ public class KokoroStreamingTextToSpeechClient implements StreamingTextToSpeechC
             JsonNode node = mapper.readTree(message);
             String marker = resolveMarker(node);
             switch (marker) {
-                case "started", "ready", "begin" -> {
-                    // ignore informational frames
-                }
+                case "started", "ready", "begin" -> log.trace("【Kokoro 流式合成】收到状态帧：{}", marker);
                 case "chunk", "audio", "data" -> {
                     String base64 = extractAudioBase64(node);
                     if (!base64.isEmpty()) {
-                        onChunk.accept(Base64.getDecoder().decode(base64));
+                        byte[] audio = Base64.getDecoder().decode(base64);
+                        log.trace("【Kokoro 流式合成】收到音频片段（Base64），解码后长度：{}", audio.length);
+                        onChunk.accept(audio);
                     }
                 }
                 case "end", "finished", "done", "complete" -> {
+                    log.debug("【Kokoro 流式合成】收到结束标记：{}", marker);
                     if (!completion.isDone()) {
                         completion.complete(null);
                     }
@@ -126,8 +142,8 @@ public class KokoroStreamingTextToSpeechClient implements StreamingTextToSpeechC
                     ws.close(1000, "done");
                 }
                 default -> {
-                    // Some Kokoro builds send text transcripts as "message" field; treat as completion hint
                     if (node.hasNonNull("message") && !completion.isDone()) {
+                        log.debug("【Kokoro 流式合成】收到 message 字段，提前结束：{}", node.get("message").asText());
                         completion.complete(null);
                         onComplete.run();
                         ws.close(1000, "message");
@@ -135,7 +151,7 @@ public class KokoroStreamingTextToSpeechClient implements StreamingTextToSpeechC
                 }
             }
         } catch (Exception parseError) {
-            // Fallback: treat non-JSON string
+            log.warn("【Kokoro 流式合成】解析文本消息失败，将尝试降级处理", parseError);
             if (message.contains("\"event\":\"end\"")) {
                 if (!completion.isDone()) {
                     completion.complete(null);
@@ -144,6 +160,7 @@ public class KokoroStreamingTextToSpeechClient implements StreamingTextToSpeechC
                 ws.close(1000, "done");
             } else if (!message.isBlank()) {
                 byte[] chunk = message.getBytes(StandardCharsets.UTF_8);
+                log.trace("【Kokoro 流式合成】将纯文本消息作为音频片段处理，长度：{}", chunk.length);
                 onChunk.accept(chunk);
             }
         }

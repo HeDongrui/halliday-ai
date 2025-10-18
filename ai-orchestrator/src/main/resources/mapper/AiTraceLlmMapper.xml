@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.halliday.ai.orchestrator.persistence.mapper.AiTraceLlmMapper">
+
+    <resultMap id="AiTraceLlmResultMap" type="com.halliday.ai.orchestrator.persistence.entity.AiTraceLlmEntity">
+        <id column="id" property="id" />
+        <result column="trace_id" property="traceId" />
+        <result column="user_id" property="userId" />
+        <result column="round_index" property="roundIndex" />
+        <result column="model_name" property="modelName" />
+        <result column="prompt_text" property="promptText" />
+        <result column="response_text" property="responseText" />
+        <result column="tool_calls" property="toolCalls" />
+        <result column="input_tokens" property="inputTokens" />
+        <result column="output_tokens" property="outputTokens" />
+        <result column="total_tokens" property="totalTokens" />
+        <result column="start_time" property="startTime" />
+        <result column="end_time" property="endTime" />
+        <result column="latency_ms" property="latencyMs" />
+        <result column="finish_reason" property="finishReason" />
+        <result column="request_params" property="requestParams" />
+        <result column="response_json" property="responseJson" />
+        <result column="remark" property="remark" />
+        <result column="create_time" property="createTime" />
+        <result column="update_time" property="updateTime" />
+    </resultMap>
+
+    <select id="selectByTraceIdAndRound" resultMap="AiTraceLlmResultMap">
+        SELECT *
+        FROM ai_trace_llm
+        WHERE trace_id = #{traceId}
+          AND round_index = #{roundIndex}
+        LIMIT 1
+    </select>
+
+</mapper>

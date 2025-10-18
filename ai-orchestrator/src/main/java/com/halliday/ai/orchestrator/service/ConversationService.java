@@ -8,6 +8,8 @@ import com.halliday.ai.common.exception.AiServiceException;
 import com.halliday.ai.llm.core.LanguageModelClient;
 import com.halliday.ai.stt.core.SpeechToTextClient;
 import com.halliday.ai.tts.core.TextToSpeechClient;
+import com.halliday.ai.trace.model.TraceRoundDetail;
+import com.halliday.ai.trace.service.TraceRecordService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -24,13 +26,16 @@ public class ConversationService {
     private final SpeechToTextClient speechToTextClient;
     private final LanguageModelClient languageModelClient;
     private final TextToSpeechClient textToSpeechClient;
+    private final TraceRecordService traceRecordService;
 
     public ConversationService(SpeechToTextClient speechToTextClient,
                                LanguageModelClient languageModelClient,
-                               TextToSpeechClient textToSpeechClient) {
+                               TextToSpeechClient textToSpeechClient,
+                               TraceRecordService traceRecordService) {
         this.speechToTextClient = speechToTextClient;
         this.languageModelClient = languageModelClient;
         this.textToSpeechClient = textToSpeechClient;
+        this.traceRecordService = traceRecordService;
         log.debug("【会话服务】ConversationService 初始化完成");
     }
 
@@ -62,6 +67,17 @@ public class ConversationService {
                 .build();
         log.info("【会话服务】对话处理完成");
         return Optional.of(result);
+    }
+
+    /**
+     * 查询指定 traceId 的最新轮次追踪数据，用于调试或外部检索。
+     *
+     * @param traceId 链路追踪 ID
+     * @return 最近一次轮次详情
+     */
+    public Optional<TraceRoundDetail> loadLatestTrace(String traceId) {
+        log.debug("【会话服务】准备查询最新追踪数据，traceId={}", traceId);
+        return traceRecordService.loadLatestRound(traceId);
     }
 
     private Optional<String> resolveUserText(ConversationInput input) {

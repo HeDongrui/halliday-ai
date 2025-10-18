@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.halliday.ai.trace.persistence.mapper.AiTraceSttMapper">
+
+    <resultMap id="AiTraceSttResultMap" type="com.halliday.ai.trace.persistence.entity.AiTraceSttEntity">
+        <id column="id" property="id" />
+        <result column="trace_id" property="traceId" />
+        <result column="user_id" property="userId" />
+        <result column="round_index" property="roundIndex" />
+        <result column="segment_index" property="segmentIndex" />
+        <result column="engine_name" property="engineName" />
+        <result column="language" property="language" />
+        <result column="request_params" property="requestParams" />
+        <result column="response_json" property="responseJson" />
+        <result column="is_final" property="isFinal" />
+        <result column="recognized_text" property="recognizedText" />
+        <result column="confidence" property="confidence" />
+        <result column="start_time" property="startTime" />
+        <result column="end_time" property="endTime" />
+        <result column="duration_ms" property="durationMs" />
+        <result column="remark" property="remark" />
+        <result column="create_time" property="createTime" />
+        <result column="update_time" property="updateTime" />
+    </resultMap>
+
+    <delete id="deleteByTraceIdAndRound">
+        DELETE
+        FROM ai_trace_stt
+        WHERE trace_id = #{traceId}
+          AND round_index = #{roundIndex}
+    </delete>
+
+    <select id="selectByTraceIdAndRound" resultMap="AiTraceSttResultMap">
+        SELECT *
+        FROM ai_trace_stt
+        WHERE trace_id = #{traceId}
+          AND round_index = #{roundIndex}
+        ORDER BY segment_index ASC
+    </select>
+
+</mapper>

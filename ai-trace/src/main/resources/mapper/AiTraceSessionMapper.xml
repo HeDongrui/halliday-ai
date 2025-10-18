@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.halliday.ai.trace.persistence.mapper.AiTraceSessionMapper">
+
+    <resultMap id="AiTraceSessionResultMap" type="com.halliday.ai.trace.persistence.entity.AiTraceSessionEntity">
+        <id column="id" property="id" />
+        <result column="trace_id" property="traceId" />
+        <result column="user_id" property="userId" />
+        <result column="round_index" property="roundIndex" />
+        <result column="start_time" property="startTime" />
+        <result column="end_time" property="endTime" />
+        <result column="duration_ms" property="durationMs" />
+        <result column="llm_model" property="llmModel" />
+        <result column="llm_input_tokens" property="llmInputTokens" />
+        <result column="llm_output_tokens" property="llmOutputTokens" />
+        <result column="llm_total_tokens" property="llmTotalTokens" />
+        <result column="status" property="status" />
+        <result column="error_message" property="errorMessage" />
+        <result column="remark" property="remark" />
+        <result column="create_time" property="createTime" />
+        <result column="update_time" property="updateTime" />
+    </resultMap>
+
+    <select id="selectByTraceId" parameterType="string" resultMap="AiTraceSessionResultMap">
+        SELECT *
+        FROM ai_trace_session
+        WHERE trace_id = #{traceId}
+        LIMIT 1
+    </select>
+
+</mapper>

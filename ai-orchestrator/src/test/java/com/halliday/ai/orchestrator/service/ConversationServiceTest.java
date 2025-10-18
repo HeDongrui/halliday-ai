@@ -8,6 +8,14 @@ import com.halliday.ai.common.conversation.ConversationResult;
 import com.halliday.ai.llm.core.LanguageModelClient;
 import com.halliday.ai.stt.core.SpeechToTextClient;
 import com.halliday.ai.tts.core.TextToSpeechClient;
+import com.halliday.ai.trace.model.TraceRoundDetail;
+import com.halliday.ai.trace.persistence.entity.AiTraceErrorEntity;
+import com.halliday.ai.trace.persistence.entity.AiTraceEventEntity;
+import com.halliday.ai.trace.persistence.entity.AiTraceLlmEntity;
+import com.halliday.ai.trace.persistence.entity.AiTraceSessionEntity;
+import com.halliday.ai.trace.persistence.entity.AiTraceSttEntity;
+import com.halliday.ai.trace.persistence.entity.AiTraceTtsEntity;
+import com.halliday.ai.trace.service.TraceRecordService;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -23,7 +31,8 @@ class ConversationServiceTest {
         StubStt stt = new StubStt("transcribed");
         StubLlm llm = new StubLlm("你好，我是助手。");
         StubTts tts = new StubTts();
-        ConversationService service = new ConversationService(stt, llm, tts);
+        StubTraceRecordService trace = new StubTraceRecordService();
+        ConversationService service = new ConversationService(stt, llm, tts, trace);
 
         ConversationInput input = ConversationInput.builder()
                 .textOverride("你好")
@@ -46,7 +55,8 @@ class ConversationServiceTest {
         StubStt stt = new StubStt("transcribed");
         StubLlm llm = new StubLlm("回复");
         StubTts tts = new StubTts();
-        ConversationService service = new ConversationService(stt, llm, tts);
+        StubTraceRecordService trace = new StubTraceRecordService();
+        ConversationService service = new ConversationService(stt, llm, tts, trace);
 
         ConversationInput input = ConversationInput.builder()
                 .audio(new byte[]{1, 2, 3})
@@ -65,7 +75,8 @@ class ConversationServiceTest {
         StubStt stt = new StubStt("");
         StubLlm llm = new StubLlm("should not be used");
         StubTts tts = new StubTts();
-        ConversationService service = new ConversationService(stt, llm, tts);
+        StubTraceRecordService trace = new StubTraceRecordService();
+        ConversationService service = new ConversationService(stt, llm, tts, trace);
 
         ConversationInput input = ConversationInput.builder()
                 .audio(new byte[]{1, 2, 3})
@@ -119,6 +130,34 @@ class ConversationServiceTest {
         @Override
         public AudioFormat outputFormat() {
             return AudioFormat.PCM16_MONO_16K;
+        }
+    }
+
+    private static final class StubTraceRecordService implements TraceRecordService {
+
+        @Override
+        public void persistRound(AiTraceSessionEntity session,
+                                 List<AiTraceEventEntity> events,
+                                 List<AiTraceSttEntity> sttSegments,
+                                 AiTraceLlmEntity llmRecord,
+                                 List<AiTraceTtsEntity> ttsSegments,
+                                 List<AiTraceErrorEntity> errors) {
+            // no-op for unit tests
+        }
+
+        @Override
+        public Optional<TraceRoundDetail> loadLatestRound(String traceId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public Optional<TraceRoundDetail> loadRound(String traceId, Integer roundIndex) {
+            return Optional.empty();
+        }
+
+        @Override
+        public Optional<AiTraceSessionEntity> findSession(String traceId) {
+            return Optional.empty();
         }
     }
 }

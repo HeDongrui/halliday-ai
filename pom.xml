@@ -13,6 +13,7 @@
         <module>ai-stt</module>
         <module>ai-tts</module>
         <module>ai-llm</module>
+        <module>ai-trace</module>
         <module>ai-orchestrator</module>
     </modules>
     <properties>

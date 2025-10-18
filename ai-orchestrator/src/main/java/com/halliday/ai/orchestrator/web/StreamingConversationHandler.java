@@ -74,11 +74,11 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         sttClients.forEach((beanName, client) -> {
             String id = extractProviderId(beanName, client);
             if (!StringUtils.hasText(id)) {
-                log.warn("Ignore streaming STT bean '{}' due to empty provider id", beanName);
+                log.warn("【流式会话】忽略名称为 {} 的 STT Bean，原因：提供者 ID 为空", beanName);
                 return;
             }
             if (clientMap.containsKey(id)) {
-                log.warn("Duplicate streaming STT provider id '{}', keeping the first instance", id);
+                log.warn("【流式会话】检测到重复的 STT 提供者 ID {}，保留第一个实例", id);
                 return;
             }
             clientMap.put(id, client);
@@ -95,13 +95,16 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         this.streamingTtsClient = Objects.requireNonNull(streamingTtsClient, "streamingTtsClient");
         this.blockingTtsClient = Objects.requireNonNull(blockingTtsClient, "blockingTtsClient");
         this.ttsProperties = Objects.requireNonNull(ttsProperties, "ttsProperties");
+        log.debug("【流式会话】初始化完成，STT 服务数量：{}，默认 STT：{}", this.sttClients.size(), this.defaultSttProvider);
     }
 
     @PreDestroy
     public void shutdown() {
+        log.info("【流式会话】开始释放资源，准备关闭线程池");
         executor.shutdownNow();
         sessions.values().forEach(SessionContext::dispose);
         sessions.clear();
+        log.info("【流式会话】资源释放完成");
     }
 
     @Override
@@ -119,7 +122,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             ready.put("defaultSttProvider", defaultSttProvider);
         }
         sendJson(session, ready);
-        log.debug("WebSocket session {} established", session.getId());
+        log.debug("【流式会话】WebSocket 会话建立成功，ID={}", session.getId());
     }
 
     @Override
@@ -128,16 +131,17 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         if (ctx != null) {
             ctx.dispose();
         }
-        log.debug("WebSocket session {} closed (code={})", session.getId(), status.getCode());
+        log.debug("【流式会话】WebSocket 会话关闭，ID={}，状态码={}", session.getId(), status.getCode());
     }
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        log.trace("【流式会话】收到文本消息，长度：{}", message.getPayloadLength());
         JsonNode node = mapper.readTree(message.getPayload());
         String type = node.path("type").asText("");
         SessionContext ctx = sessions.get(session.getId());
         if (ctx == null) {
-            log.warn("Message for unknown session {}", session.getId());
+            log.warn("【流式会话】收到未知会话的消息，ID={}", session.getId());
             return;
         }
         switch (type) {
@@ -145,12 +149,14 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             case "audio" -> handleAudio(ctx, node);
             case "stop" -> handleStop(session, ctx);
             case "reset_history" -> ctx.history.clear();
-            default -> log.warn("Unsupported message type: {}", type);
+            default -> log.warn("【流式会话】收到不支持的消息类型：{}", type);
         }
     }
 
     private void handleStart(WebSocketSession session, SessionContext ctx, JsonNode node) throws IOException {
+        log.debug("【流式会话】开始新的会话轮次，session={}", session.getId());
         if (ctx.turnActive.get()) {
+            log.warn("【流式会话】上一轮对话尚未结束，拒绝新的 start 指令");
             sendJson(session, error("TURN_IN_PROGRESS", "上一轮对话尚未完成"));
             return;
         }
@@ -174,6 +180,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         ctx.sttProvider = provider;
         ctx.turnActive.set(true);
         ctx.capturing.set(true);
+        log.info("【流式会话】已选择 STT 服务：{}", ctx.sttProvider);
         ObjectNode listening = event("listening");
         listening.put("sttProvider", ctx.sttProvider);
         listening.put("sttProviderName", sttDisplayNames.getOrDefault(ctx.sttProvider, ctx.sttProvider));
@@ -183,27 +190,31 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
 
     private void handleAudio(SessionContext ctx, JsonNode node) {
         if (!ctx.capturing.get()) {
+            log.trace("【流式会话】忽略音频片段：当前未处于采集状态");
             return;
         }
         String chunkBase64 = node.path("chunk").asText("");
         if (!StringUtils.hasText(chunkBase64)) {
+            log.trace("【流式会话】收到空的音频片段，忽略");
             return;
         }
         byte[] bytes = Base64.getDecoder().decode(chunkBase64);
         PipedOutputStream output = ctx.audioOutput;
         if (output == null) {
+            log.warn("【流式会话】音频输出管道尚未就绪，丢弃当前片段");
             return;
         }
         try {
             output.write(bytes);
         } catch (IOException ex) {
-            log.warn("Failed to write audio chunk", ex);
+            log.warn("【流式会话】写入音频片段失败", ex);
             ctx.capturing.set(false);
         }
     }
 
     private void handleStop(WebSocketSession session, SessionContext ctx) {
         if (!ctx.capturing.compareAndSet(true, false)) {
+            log.trace("【流式会话】收到 stop 指令但当前未采集音频");
             return;
         }
         try {
@@ -240,6 +251,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
         }
         ctx.initAudioPipe();
         ctx.asrStartMs = System.currentTimeMillis();
+        log.info("【流式会话】启动语音识别，提供者：{}", ctx.sttProvider);
         ObjectNode extra = mapper.createObjectNode();
         extra.put("sampleRate", ctx.inputFormat.sampleRate());
         extra.put("channels", ctx.inputFormat.channels());
@@ -251,7 +263,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             try {
                 sttClient.streamRecognize(ctx.audioInput, result -> handleSttResult(session, ctx, result));
             } catch (Exception ex) {
-                log.warn("Streaming STT failed", ex);
+                log.warn("【流式会话】语音识别流程出现异常", ex);
                 long end = System.currentTimeMillis();
                 ObjectNode errorExtra = mapper.createObjectNode();
                 errorExtra.put("message", ex.getMessage());
@@ -421,7 +433,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             }, () -> completed.complete(null));
             completed.join();
         } catch (Exception ex) {
-            log.warn("Streaming TTS failed, fallback to blocking synth", ex);
+            log.warn("【流式会话】流式语音合成失败，准备回退到阻塞模式", ex);
             long errorTime = System.currentTimeMillis();
             ObjectNode errorExtra = mapper.createObjectNode();
             errorExtra.put("sentenceIndex", sentenceIndex);
@@ -440,7 +452,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
             try {
                 byte[] audio = blockingTtsClient.synthesize(sentence, null);
                 if (audio != null && audio.length > 0) {
-                    log.debug("Fallback TTS used for sentence: {}", sentence);
+                    log.debug("【流式会话】已使用阻塞式 TTS 回退，文本：{}", sentence);
                     chunkAndSendAudio(session, audio);
                     long fallbackEnd = System.currentTimeMillis();
                     fallbackExtra.put("bytes", audio.length);
@@ -533,7 +545,7 @@ public class StreamingConversationHandler extends TextWebSocketHandler {
                 session.sendMessage(new TextMessage(node.toString()));
             }
         } catch (IOException ex) {
-            log.warn("Failed to send WebSocket message", ex);
+            log.warn("【流式会话】发送 WebSocket 消息失败", ex);
         }
     }
 

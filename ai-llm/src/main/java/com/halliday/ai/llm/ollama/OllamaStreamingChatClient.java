@@ -13,6 +13,8 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.util.StringUtils;
 
 import java.io.BufferedReader;
@@ -30,6 +32,7 @@ import java.util.function.Consumer;
 
 public class OllamaStreamingChatClient implements StreamingLanguageModelClient {
 
+    private static final Logger log = LoggerFactory.getLogger(OllamaStreamingChatClient.class);
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
     private final OllamaLlmProperties properties;
@@ -39,19 +42,20 @@ public class OllamaStreamingChatClient implements StreamingLanguageModelClient {
     public OllamaStreamingChatClient(OllamaLlmProperties properties, ObjectMapper mapper) {
         this.properties = Objects.requireNonNull(properties, "properties");
         this.mapper = Objects.requireNonNull(mapper, "mapper");
+        log.debug("【Ollama 流式客户端】初始化，目标地址：{}，模型：{}", properties.getBaseUrl(), properties.getModel());
         this.client = new OkHttpClient.Builder()
                 .connectTimeout(properties.getConnectTimeoutMs(), TimeUnit.MILLISECONDS)
                 .readTimeout(properties.getReadTimeoutMs(), TimeUnit.MILLISECONDS)
                 .build();
     }
 
-//    @Override
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     @Override
     public void streamChat(List<ConversationMessage> history,
                            Consumer<String> onDelta,
                            Consumer<StreamingLanguageModelClient.Completion> onComplete) {
+        log.info("【Ollama 流式客户端】开始流式对话，请求历史消息数量：{}", history == null ? 0 : history.size());
         try {
             Map<String, Object> payload = new HashMap<>();
             payload.put("model", properties.getModel());
@@ -66,11 +70,14 @@ public class OllamaStreamingChatClient implements StreamingLanguageModelClient {
             RequestBody body = RequestBody.create(mapper.writeValueAsBytes(payload), JSON);
             Request.Builder builder = new Request.Builder().url(properties.getBaseUrl()).post(body);
             if (StringUtils.hasText(properties.getApiKey())) {
+                log.debug("【Ollama 流式客户端】使用 API Key 进行鉴权");
                 builder.addHeader("Authorization", "Bearer " + properties.getApiKey());
             }
 
             try (Response response = client.newCall(builder.build()).execute()) {
+                log.debug("【Ollama 流式客户端】收到响应，HTTP 状态码：{}", response.code());
                 if (!response.isSuccessful()) {
+                    log.error("【Ollama 流式客户端】调用失败，状态码：{}", response.code());
                     throw new AiServiceException("LLM streaming failed with status " + response.code());
                 }
                 StringBuilder complete = new StringBuilder();
@@ -85,6 +92,7 @@ public class OllamaStreamingChatClient implements StreamingLanguageModelClient {
                         }
                         String json = line.startsWith("data:") ? line.substring(5).trim() : line.trim();
                         if ("[DONE]".equals(json)) {
+                            log.debug("【Ollama 流式客户端】收到结束标记");
                             break;
                         }
                         rawEvents.add(json);
@@ -95,6 +103,7 @@ public class OllamaStreamingChatClient implements StreamingLanguageModelClient {
                             String content = delta.path("content").asText("");
                             if (StringUtils.hasText(content)) {
                                 complete.append(content);
+                                log.trace("【Ollama 流式客户端】追加文本片段：{}", content);
                                 onDelta.accept(content);
                             }
                             String finish = choices.get(0).path("finish_reason").asText("");
@@ -135,34 +144,43 @@ public class OllamaStreamingChatClient implements StreamingLanguageModelClient {
                             if (root.hasNonNull("eval_duration")) {
                                 metadata.put("eval_duration", root.get("eval_duration").asLong());
                             }
+                            log.debug("【Ollama 流式客户端】收到 done 事件，结束流式解析");
                             break;
                         }
                     }
                 }
-                onComplete.accept(new StreamingLanguageModelClient.Completion(complete.toString(), metadata));
+                String result = complete.toString();
+                log.info("【Ollama 流式客户端】流式对话完成，最终文本长度：{}", result.length());
+                onComplete.accept(new StreamingLanguageModelClient.Completion(result, metadata));
             }
         } catch (IOException ex) {
+            log.error("【Ollama 流式客户端】流式调用发生 IO 异常", ex);
             throw new AiServiceException("Failed to stream LLM response", ex);
         }
     }
 
     private List<Map<String, String>> serializeMessages(List<ConversationMessage> history) {
+        log.debug("【Ollama 流式客户端】序列化历史消息，原始数量：{}", history == null ? 0 : history.size());
         List<Map<String, String>> messages = new ArrayList<>();
         if (StringUtils.hasText(properties.getSystemPrompt())) {
+            log.debug("【Ollama 流式客户端】添加系统提示词");
             messages.add(messageOf(ConversationRole.SYSTEM, properties.getSystemPrompt()));
         }
         if (history != null) {
             for (ConversationMessage message : history) {
                 if (message == null || !StringUtils.hasText(message.content())) {
+                    log.debug("【Ollama 流式客户端】跳过空消息或无内容消息");
                     continue;
                 }
                 messages.add(messageOf(message.role(), message.content()));
             }
         }
+        log.debug("【Ollama 流式客户端】历史消息序列化完成，数量：{}", messages.size());
         return messages;
     }
 
     private Map<String, String> messageOf(ConversationRole role, String content) {
+        log.debug("【Ollama 流式客户端】转换消息，角色：{}，内容长度：{}", role, content == null ? 0 : content.length());
         Map<String, String> map = new HashMap<>();
         map.put("role", switch (role) {
             case SYSTEM -> "system";

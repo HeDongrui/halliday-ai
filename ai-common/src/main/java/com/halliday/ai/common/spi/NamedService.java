@@ -1,5 +1,8 @@
 package com.halliday.ai.common.spi;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.Locale;
 import java.util.Objects;
 
@@ -10,6 +13,8 @@ import java.util.Objects;
  * 同时允许提供一个友好的展示名称。
  */
 public interface NamedService {
+
+    Logger log = LoggerFactory.getLogger(NamedService.class);
 
     /**
      * 唯一标识符，要求小写且不含空白字符。
@@ -24,8 +29,11 @@ public interface NamedService {
      * @return display name
      */
     default String displayName() {
-        String id = Objects.requireNonNull(id(), "id() must not return null");
-        return id.isBlank() ? id : id.substring(0, 1).toUpperCase(Locale.ROOT) + id.substring(1);
+        String idValue = Objects.requireNonNull(id(), "id() must not return null");
+        log.debug("【命名服务】生成展示名称，原始标识：{}", idValue);
+        String display = idValue.isBlank() ? idValue : idValue.substring(0, 1).toUpperCase(Locale.ROOT) + idValue.substring(1);
+        log.debug("【命名服务】展示名称生成完成：{}", display);
+        return display;
     }
 }
 

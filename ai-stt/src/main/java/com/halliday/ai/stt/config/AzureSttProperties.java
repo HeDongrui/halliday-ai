@@ -1,5 +1,7 @@
 package com.halliday.ai.stt.config;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -7,6 +9,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = "ai.stt.azure")
 public class AzureSttProperties {
+
+    private static final Logger log = LoggerFactory.getLogger(AzureSttProperties.class);
 
     /**
      * Whether Azure streaming STT should be used.
@@ -59,82 +63,102 @@ public class AzureSttProperties {
     private long operationTimeoutMs = 10_000;
 
     public boolean isEnabled() {
+        log.debug("【Azure 配置】读取 enabled：{}", enabled);
         return enabled;
     }
 
     public void setEnabled(boolean enabled) {
+        log.debug("【Azure 配置】设置 enabled：{}", enabled);
         this.enabled = enabled;
     }
 
     public String getSubscriptionKey() {
+        log.debug("【Azure 配置】读取 subscriptionKey 是否为空：{}", subscriptionKey == null || subscriptionKey.isBlank());
         return subscriptionKey;
     }
 
     public void setSubscriptionKey(String subscriptionKey) {
+        log.debug("【Azure 配置】设置 subscriptionKey 是否为空：{}", subscriptionKey == null || subscriptionKey.isBlank());
         this.subscriptionKey = subscriptionKey;
     }
 
     public String getRegion() {
+        log.debug("【Azure 配置】读取 region：{}", region);
         return region;
     }
 
     public void setRegion(String region) {
+        log.debug("【Azure 配置】设置 region：{}", region);
         this.region = region;
     }
 
     public String getEndpoint() {
+        log.debug("【Azure 配置】读取 endpoint：{}", endpoint);
         return endpoint;
     }
 
     public void setEndpoint(String endpoint) {
+        log.debug("【Azure 配置】设置 endpoint：{}", endpoint);
         this.endpoint = endpoint;
     }
 
     public String getLanguage() {
+        log.debug("【Azure 配置】读取 language：{}", language);
         return language;
     }
 
     public void setLanguage(String language) {
+        log.debug("【Azure 配置】设置 language：{}", language);
         this.language = language;
     }
 
     public int getSampleRate() {
+        log.debug("【Azure 配置】读取 sampleRate：{}", sampleRate);
         return sampleRate;
     }
 
     public void setSampleRate(int sampleRate) {
+        log.debug("【Azure 配置】设置 sampleRate：{}", sampleRate);
         this.sampleRate = sampleRate;
     }
 
     public int getChannels() {
+        log.debug("【Azure 配置】读取 channels：{}", channels);
         return channels;
     }
 
     public void setChannels(int channels) {
+        log.debug("【Azure 配置】设置 channels：{}", channels);
         this.channels = channels;
     }
 
     public int getBitDepth() {
+        log.debug("【Azure 配置】读取 bitDepth：{}", bitDepth);
         return bitDepth;
     }
 
     public void setBitDepth(int bitDepth) {
+        log.debug("【Azure 配置】设置 bitDepth：{}", bitDepth);
         this.bitDepth = bitDepth;
     }
 
     public int getReadBufferSize() {
+        log.debug("【Azure 配置】读取 readBufferSize：{}", readBufferSize);
         return readBufferSize;
     }
 
     public void setReadBufferSize(int readBufferSize) {
+        log.debug("【Azure 配置】设置 readBufferSize：{}", readBufferSize);
         this.readBufferSize = readBufferSize;
     }
 
     public long getOperationTimeoutMs() {
+        log.debug("【Azure 配置】读取 operationTimeoutMs：{}", operationTimeoutMs);
         return operationTimeoutMs;
     }
 
     public void setOperationTimeoutMs(long operationTimeoutMs) {
+        log.debug("【Azure 配置】设置 operationTimeoutMs：{}", operationTimeoutMs);
         this.operationTimeoutMs = operationTimeoutMs;
     }
 
@@ -142,8 +166,10 @@ public class AzureSttProperties {
      * @return whether Azure STT has the minimum credentials to start.
      */
     public boolean hasCredentials() {
-        return subscriptionKey != null && !subscriptionKey.isBlank()
+        boolean available = subscriptionKey != null && !subscriptionKey.isBlank()
                 && ((endpoint != null && !endpoint.isBlank()) || (region != null && !region.isBlank()));
+        log.debug("【Azure 配置】检测凭据是否完整：{}", available);
+        return available;
     }
 }
 
